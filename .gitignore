@@ -3,3 +3,6 @@
 *~
 .idea/
 .vscode/
+
+# Local bridge config written by tools/enable_bridge.sh
+.bridge.env

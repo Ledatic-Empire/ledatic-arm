@@ -6,6 +6,14 @@ set -euo pipefail
 PORT="${1:-7071}"
 HERE="$(cd "$(dirname "$0")" && pwd)"
 
+# Source bridge config if previously written by tools/enable_bridge.sh.
+# Lets ./run.sh resume the user's last bridge mode across restarts.
+if [[ -f "$HERE/.bridge.env" ]]; then
+  set -a
+  . "$HERE/.bridge.env"
+  set +a
+fi
+
 RAIL_BIN="${RAIL_BIN:-$HOME/projects/rail/rail_native}"
 RAIL_ROOT="${RAIL_ROOT:-$(dirname "$RAIL_BIN")}"
 

@@ -6,14 +6,53 @@ sim and the physical arm.
 
 ## Status
 
-Scaffold only. Waiting on the **LewanSoul MaxArm** (ESP32-based,
-WiFi/Bluetooth, suction end-effector) to arrive. This repo is being
-built sim-first so delivery day is a 30-minute integration: unbox ->
-measure -> update `arms/maxarm.json` -> smoke-test -> first attested
-move.
+**Sim functional, pre-delivery prep complete.** The single arm in scope
+is the LewanSoul MaxArm (ESP32-based, 4-DOF + suction). Arrival
+scheduled for 2026-05-17. The sim mirrors the firmware's FK/IK
+byte-for-byte and speaks the same AA 55 wire protocol; flipping to
+real-arm control is a single `tools/enable_bridge.sh` invocation.
 
-The single arm in scope is the MaxArm. Prior experiments around other
-educational arms are out of scope.
+## Quickstart (sim)
+
+Requires a Rail compiler (`github.com/zemo-g/rail`).
+
+```bash
+git clone https://github.com/zemo-g/rail ~/projects/rail
+# follow rail's README to produce a rail_native binary
+
+git clone https://github.com/Ledatic-Empire/ledatic-arm ~/projects/ledatic-arm
+cd ~/projects/ledatic-arm
+./run.sh 7071
+open http://localhost:7071/
+```
+
+The browser renders the 4-DOF MaxArm. Drive it via joint sliders, IK
+targets, named poses, or canned programs (`wave`, `nod`, `scan`,
+`dance`). Every move is hash-chained for tamper-evident audit.
+
+## Go real (when the MaxArm is plugged in)
+
+```bash
+# USB-serial (lowest latency)
+tools/enable_bridge.sh usb                        # auto-detect device
+tools/enable_bridge.sh usb /dev/cu.usbserial-XXX  # explicit
+
+# WiFi (TCP)
+tools/enable_bridge.sh wifi 192.168.149.1 6000
+
+# Back to pure sim
+tools/enable_bridge.sh off
+
+# What mode am I in?
+tools/enable_bridge.sh status
+```
+
+`tools/enable_bridge.sh` writes `.bridge.env` (gitignored), manages a
+FIFO → serial relay via `socat` (or Python+pyserial fallback), and
+bounces the server. The viewer URL, routes, and contract don't change
+— the arm just starts physically moving in response to /pose. See
+[docs/DELIVERY_DAY.md](docs/DELIVERY_DAY.md) for the full unbox →
+calibrate → first attested move runbook.
 
 ## Layout
 
@@ -78,13 +117,16 @@ Starters: `wave`, `nod`, `scan`, `dance`. Author your own — drop a
 
 - [x] `arms/maxarm.json` — geometry/limits firmware-canonical from Hiwonder source
 - [x] `src/armsim.rail` — FK/IK byte-ported from `_espmax.cpp`, HTTP handler, state, named poses
-- [x] `web/index.html` — 3D viewer matching MaxArm geometry
+- [x] `web/index.html` — 3D viewer matching MaxArm geometry, smooth motion easing, chain panel, ghost arm
 - [x] `protocols/lewansoul.rail` — AA 55 byte protocol, 9/9 self-tests PASS
-- [x] Attestation chain — every mutating action SHA-chained at `/chain`
-- [x] On-demand beacon anchor — `/anchor` invokes the existing fleet0 witness pipeline
+- [x] Attestation chain — every mutating action SHA-chained at `/chain`, persistent at `~/.ledatic-arm/chain/`
+- [x] Beacon anchor — `/anchor` invokes fleet0 witness (sign_token rotation in flight)
+- [x] Motion timing — `?time_ms=` on every mutating route, smoothstep ease, viewer interpolates at 60fps
+- [x] Programs — `wave`, `nod`, `scan`, `dance` runners + viewer panel
+- [x] E-stop, z-floor, JSON escape, per-PID attest temp
+- [x] Real-arm bridge — `tools/enable_bridge.sh usb|wifi|off`, FIFO + TCP modes
 - [x] `docs/DELIVERY_DAY.md` — 30-minute integration runbook
-- [ ] Real-arm bridge — `ARMSIM_AA55_HOST` env wires `/pose` into the byte protocol
-- [ ] Viewer chain UI — render the chain head and recent entries in the right panel
+- [ ] `/actual` route — wire to `READ_ANGLE` polling once bridge is live
 - [ ] Behavior-cloning policy net on top of Rail GPU kernels
 
 ## License
