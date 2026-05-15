@@ -1,0 +1,1907 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<meta name="description" content="MaxArm control surface — live 3D viewer + tactical control plane for the Hiwonder MaxArm 4-DOF robotic arm.">
+<meta name="color-scheme" content="dark">
+<title>maxarm.console</title>
+<style>
+/* ============================================================
+   maxarm.console — single-file viewer + control plane
+   CRT-green-on-charcoal, Neuromancer DNA, oscilloscope readout.
+   ============================================================ */
+
+:root {
+  --bg:     #0a0e0f;
+  --pane:   #0e1416;
+  --pane2:  #11191c;
+  --grid:   #172123;
+  --axis:   #324546;
+  --ink:    #d8e0e2;
+  --dim:    #5c706e;
+  --mute:   #7a8e8c;
+  --accent: #65f068;
+  --accent-dim: rgba(101, 240, 104, 0.18);
+  --accent-faint: rgba(101, 240, 104, 0.06);
+  --alert:  #ff6b3d;
+  --alert-dim: rgba(255, 107, 61, 0.18);
+
+  --mono: "SF Mono", "JetBrains Mono", "IBM Plex Mono", Menlo, Consolas, ui-monospace, monospace;
+
+  --pad: 14px;
+  --gap: 10px;
+  --radius: 2px;
+
+  --ease: cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+html, body { width: 100%; height: 100%; }
+html { background: var(--bg); }
+body {
+  font-family: var(--mono);
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--ink);
+  background: var(--bg);
+  overflow: hidden;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  letter-spacing: 0.01em;
+}
+
+/* CRT scanline veneer — very subtle */
+body::after {
+  content: "";
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 1000;
+  background: repeating-linear-gradient(
+    180deg,
+    rgba(0, 0, 0, 0) 0px,
+    rgba(0, 0, 0, 0) 2px,
+    rgba(0, 0, 0, 0.025) 3px,
+    rgba(0, 0, 0, 0) 4px
+  );
+  mix-blend-mode: multiply;
+}
+
+button, input { font-family: inherit; color: inherit; }
+
+/* ============================================================
+   FRAME
+   ============================================================ */
+.frame {
+  position: fixed;
+  inset: 0;
+  display: grid;
+  grid-template-rows: 36px 1fr 28px;
+  grid-template-columns: 1fr;
+}
+
+/* ============================================================
+   TOP RAIL
+   ============================================================ */
+.toprail {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  align-items: center;
+  padding: 0 16px;
+  border-bottom: 1px solid var(--grid);
+  background: var(--pane);
+  position: relative;
+  z-index: 2;
+}
+.brand {
+  font-size: 11px;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  color: var(--ink);
+  font-weight: 500;
+}
+.brand .slash { color: var(--accent); margin: 0 0.4em; }
+.brand .sys { color: var(--mute); }
+
+.toprail-mid {
+  text-align: center;
+  font-size: 10px;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--dim);
+}
+.toprail-mid .pulse {
+  display: inline-block;
+  width: 6px; height: 6px; border-radius: 50%;
+  background: var(--accent);
+  vertical-align: middle;
+  margin-right: 8px;
+  box-shadow: 0 0 8px var(--accent);
+  animation: heartbeat 1.6s ease-in-out infinite;
+}
+.toprail-mid.offline .pulse { background: var(--alert); box-shadow: 0 0 8px var(--alert); }
+.toprail-mid.offline .pulse-label { color: var(--alert); }
+
+@keyframes heartbeat {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.4; transform: scale(0.85); }
+}
+
+.toprail-right {
+  display: flex;
+  gap: 16px;
+  font-size: 10px;
+  letter-spacing: 0.15em;
+  text-transform: uppercase;
+  color: var(--mute);
+}
+.toprail-right span b { color: var(--ink); font-weight: 500; }
+
+/* ============================================================
+   MAIN — two columns
+   ============================================================ */
+.main {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 420px;
+  min-height: 0;
+  position: relative;
+}
+@media (max-width: 1020px) {
+  .main {
+    grid-template-columns: 1fr;
+    grid-template-rows: 50vh 1fr;
+  }
+}
+
+/* ============================================================
+   VIEWER (left)
+   ============================================================ */
+.viewer {
+  position: relative;
+  background: var(--bg);
+  overflow: hidden;
+  border-right: 1px solid var(--grid);
+}
+@media (max-width: 1020px) {
+  .viewer { border-right: none; border-bottom: 1px solid var(--grid); }
+}
+#scene {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  display: block;
+  cursor: grab;
+}
+#scene:active { cursor: grabbing; }
+
+/* Viewer overlays */
+.viewer-hud {
+  position: absolute;
+  pointer-events: none;
+  font-size: 10px;
+  letter-spacing: 0.12em;
+  color: var(--mute);
+  text-transform: uppercase;
+}
+.viewer-hud.tl { top: 12px; left: 14px; }
+.viewer-hud.tr { top: 12px; right: 14px; text-align: right; }
+.viewer-hud.bl { bottom: 12px; left: 14px; }
+.viewer-hud.br { bottom: 12px; right: 14px; text-align: right; }
+
+.viewer-hud .row { display: block; }
+.viewer-hud .k { color: var(--dim); }
+.viewer-hud .v { color: var(--ink); }
+.viewer-hud .accent { color: var(--accent); }
+
+.viewer-tools {
+  position: absolute;
+  top: 12px; right: 14px;
+  display: flex;
+  gap: 6px;
+  pointer-events: auto;
+}
+.viewer-btn {
+  background: var(--pane);
+  border: 1px solid var(--grid);
+  color: var(--mute);
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: 0.15em;
+  text-transform: uppercase;
+  padding: 5px 9px;
+  border-radius: var(--radius);
+  cursor: pointer;
+  transition: color 0.15s, border-color 0.15s, background 0.15s;
+}
+.viewer-btn:hover { color: var(--accent); border-color: var(--accent-dim); }
+.viewer-btn.on { color: var(--accent); border-color: var(--accent-dim); }
+
+.viewer-corners::before,
+.viewer-corners::after,
+.viewer-corners-b::before,
+.viewer-corners-b::after {
+  content: "";
+  position: absolute;
+  width: 12px; height: 12px;
+  border: 1px solid var(--accent);
+  pointer-events: none;
+  opacity: 0.7;
+}
+.viewer-corners::before { top: 6px;    left: 6px;   border-right: 0; border-bottom: 0; }
+.viewer-corners::after  { top: 6px;    right: 6px;  border-left: 0;  border-bottom: 0; }
+.viewer-corners-b::before { bottom: 6px; left: 6px; border-right: 0; border-top: 0; }
+.viewer-corners-b::after  { bottom: 6px; right: 6px; border-left: 0;  border-top: 0; }
+
+/* Offline / unreachable banner */
+.banner {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(10, 14, 15, 0.86);
+  z-index: 50;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.4s var(--ease);
+}
+.banner.show { opacity: 1; pointer-events: auto; }
+.banner-inner {
+  text-align: center;
+  font-size: 12px;
+  letter-spacing: 0.15em;
+  text-transform: uppercase;
+  color: var(--accent);
+  padding: 24px 36px;
+  border: 1px solid var(--accent-dim);
+  background: var(--pane);
+  border-radius: var(--radius);
+  position: relative;
+}
+.banner-inner::before { content: "[ "; color: var(--accent); }
+.banner-inner::after { content: " ]"; color: var(--accent); }
+.banner-inner .line2 { display: block; color: var(--mute); font-size: 10px; margin-top: 6px; letter-spacing: 0.1em; text-transform: none; }
+.banner-inner .blink { animation: blink 1.2s steps(2, end) infinite; }
+@keyframes blink { 0%, 49% { opacity: 1; } 50%, 100% { opacity: 0; } }
+
+/* ============================================================
+   PANEL (right)
+   ============================================================ */
+.panel {
+  background: var(--pane);
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  scrollbar-width: thin;
+  scrollbar-color: var(--grid) var(--pane);
+}
+.panel::-webkit-scrollbar { width: 6px; }
+.panel::-webkit-scrollbar-track { background: var(--pane); }
+.panel::-webkit-scrollbar-thumb { background: var(--grid); }
+
+.section {
+  border-bottom: 1px solid var(--grid);
+  padding: var(--pad);
+  position: relative;
+}
+.section:last-child { border-bottom: 0; }
+
+.section-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 12px;
+}
+.section-title {
+  font-size: 10px;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  color: var(--mute);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.section-title::before {
+  content: "";
+  display: inline-block;
+  width: 5px; height: 5px;
+  background: var(--accent);
+  opacity: 0.55;
+  transform: rotate(45deg);
+}
+.section-meta {
+  font-size: 9px;
+  color: var(--dim);
+  letter-spacing: 0.15em;
+  text-transform: uppercase;
+}
+
+/* ---------- HOME button ---------- */
+.btn-home {
+  display: block;
+  width: 100%;
+  background: var(--pane2);
+  color: var(--ink);
+  border: 1px solid var(--grid);
+  font-family: var(--mono);
+  font-size: 13px;
+  font-weight: 500;
+  letter-spacing: 0.35em;
+  text-transform: uppercase;
+  padding: 16px 12px;
+  border-radius: var(--radius);
+  cursor: pointer;
+  position: relative;
+  transition: color 0.2s, border-color 0.2s, background 0.2s, letter-spacing 0.25s var(--ease);
+}
+.btn-home::before {
+  content: "[";
+  color: var(--accent);
+  position: absolute;
+  left: 14px; top: 50%;
+  transform: translateY(-50%);
+  opacity: 0;
+  transition: opacity 0.2s, transform 0.25s var(--ease);
+}
+.btn-home::after {
+  content: "]";
+  color: var(--accent);
+  position: absolute;
+  right: 14px; top: 50%;
+  transform: translateY(-50%);
+  opacity: 0;
+  transition: opacity 0.2s, transform 0.25s var(--ease);
+}
+.btn-home:hover {
+  color: var(--accent);
+  border-color: var(--accent-dim);
+  background: var(--accent-faint);
+}
+.btn-home:hover::before,
+.btn-home:hover::after { opacity: 1; }
+.btn-home:active { transform: scale(0.99); }
+.btn-home .sub {
+  display: block;
+  font-size: 9px;
+  letter-spacing: 0.2em;
+  color: var(--dim);
+  margin-top: 4px;
+  font-weight: 400;
+}
+
+/* ---------- Sliders ---------- */
+.slider-row {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 4px;
+  padding: 8px 0;
+  border-top: 1px dashed var(--grid);
+}
+.slider-row:first-of-type { border-top: 0; padding-top: 0; }
+.slider-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  font-size: 10px;
+  letter-spacing: 0.12em;
+}
+.slider-head .name {
+  text-transform: uppercase;
+  color: var(--ink);
+}
+.slider-head .name .id {
+  color: var(--accent);
+  margin-right: 6px;
+}
+.slider-head .vals {
+  color: var(--dim);
+  font-size: 10px;
+}
+.slider-head .vals .pulse { color: var(--ink); }
+.slider-head .vals .deg { color: var(--mute); margin-left: 8px; }
+.slider-head .vals .deg::after { content: "°"; }
+
+input[type=range].slider {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 100%;
+  height: 18px;
+  background: transparent;
+  cursor: pointer;
+  margin: 2px 0;
+}
+input[type=range].slider::-webkit-slider-runnable-track {
+  height: 2px;
+  background: linear-gradient(to right, var(--accent) 0%, var(--accent) var(--fill, 50%), var(--grid) var(--fill, 50%), var(--grid) 100%);
+  border-radius: 0;
+}
+input[type=range].slider::-moz-range-track {
+  height: 2px;
+  background: var(--grid);
+}
+input[type=range].slider::-moz-range-progress {
+  height: 2px;
+  background: var(--accent);
+}
+input[type=range].slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 10px; height: 14px;
+  background: var(--ink);
+  border: 0;
+  margin-top: -6px;
+  border-radius: 1px;
+  transition: background 0.15s;
+}
+input[type=range].slider::-moz-range-thumb {
+  width: 10px; height: 14px;
+  background: var(--ink);
+  border: 0;
+  border-radius: 1px;
+}
+input[type=range].slider:hover::-webkit-slider-thumb { background: var(--accent); }
+input[type=range].slider:hover::-moz-range-thumb { background: var(--accent); }
+input[type=range].slider:focus { outline: none; }
+input[type=range].slider:focus::-webkit-slider-thumb { background: var(--accent); box-shadow: 0 0 0 1px var(--accent-dim); }
+
+.slider-scale {
+  display: flex;
+  justify-content: space-between;
+  font-size: 9px;
+  color: var(--dim);
+  letter-spacing: 0.1em;
+}
+
+/* ---------- Reach inputs ---------- */
+.reach-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr;
+  gap: 8px;
+}
+.reach-cell label {
+  display: block;
+  font-size: 9px;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  color: var(--dim);
+  margin-bottom: 4px;
+}
+.reach-cell label .ax {
+  color: var(--accent);
+  margin-right: 4px;
+}
+.reach-cell input[type=number] {
+  width: 100%;
+  background: var(--pane2);
+  border: 1px solid var(--grid);
+  color: var(--ink);
+  padding: 8px 10px;
+  border-radius: var(--radius);
+  font-family: var(--mono);
+  font-size: 13px;
+  -moz-appearance: textfield;
+  appearance: textfield;
+  transition: border-color 0.15s, background 0.15s;
+}
+.reach-cell input[type=number]::-webkit-outer-spin-button,
+.reach-cell input[type=number]::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+.reach-cell input[type=number]:focus {
+  outline: none;
+  border-color: var(--accent-dim);
+  background: var(--bg);
+}
+
+.reach-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 10px;
+  align-items: stretch;
+}
+.btn-reach {
+  flex: 1;
+  background: transparent;
+  border: 1px solid var(--accent-dim);
+  color: var(--accent);
+  font-family: var(--mono);
+  font-size: 11px;
+  letter-spacing: 0.25em;
+  text-transform: uppercase;
+  padding: 10px 12px;
+  border-radius: var(--radius);
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+.btn-reach:hover { background: var(--accent-dim); }
+.btn-reach:active { transform: scale(0.98); }
+
+.btn-reach-home {
+  background: transparent;
+  border: 1px solid var(--grid);
+  color: var(--dim);
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: 0.15em;
+  text-transform: uppercase;
+  padding: 10px 12px;
+  border-radius: var(--radius);
+  cursor: pointer;
+  transition: color 0.15s, border-color 0.15s;
+}
+.btn-reach-home:hover { color: var(--ink); border-color: var(--mute); }
+
+.reach-status {
+  margin-top: 10px;
+  font-size: 10px;
+  color: var(--dim);
+  letter-spacing: 0.05em;
+  padding: 6px 8px;
+  background: var(--pane2);
+  border-left: 2px solid var(--grid);
+  min-height: 26px;
+  font-variant-numeric: tabular-nums;
+  transition: border-color 0.2s, color 0.2s;
+}
+.reach-status.ok { border-left-color: var(--accent); color: var(--ink); }
+.reach-status.bad { border-left-color: var(--alert); color: var(--alert); }
+.reach-status .lbl { color: var(--mute); margin-right: 6px; }
+.reach-status .v { color: var(--ink); }
+
+/* ---------- Suction ---------- */
+.suction-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr;
+  gap: 8px;
+}
+.suction-btn {
+  background: var(--pane2);
+  border: 1px solid var(--grid);
+  color: var(--mute);
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  padding: 12px 6px;
+  border-radius: var(--radius);
+  cursor: pointer;
+  transition: color 0.15s, border-color 0.15s, background 0.15s;
+}
+.suction-btn:hover {
+  color: var(--ink);
+  border-color: var(--mute);
+}
+.suction-btn.active-on    { color: var(--accent); border-color: var(--accent); background: var(--accent-faint); }
+.suction-btn.active-vent  { color: var(--alert);  border-color: var(--alert);  background: rgba(255, 107, 61, 0.08); }
+.suction-btn.active-off   { color: var(--ink);    border-color: var(--mute); }
+
+.suction-state {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 10px;
+  font-size: 10px;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--mute);
+  padding: 6px 8px;
+  background: var(--pane2);
+  border-left: 2px solid var(--grid);
+}
+.suction-state .dot {
+  width: 8px; height: 8px;
+  border-radius: 50%;
+  background: var(--mute);
+  box-shadow: 0 0 0 transparent;
+  transition: background 0.2s, box-shadow 0.2s;
+}
+.suction-state[data-state=on]      { color: var(--accent); border-left-color: var(--accent); }
+.suction-state[data-state=on]      .dot { background: var(--accent); box-shadow: 0 0 8px var(--accent); }
+.suction-state[data-state=venting] { color: var(--alert);  border-left-color: var(--alert); }
+.suction-state[data-state=venting] .dot { background: var(--alert); box-shadow: 0 0 8px var(--alert); animation: blink 0.6s steps(2,end) infinite; }
+.suction-state[data-state=off]     { color: var(--mute); }
+
+/* ---------- Poses ---------- */
+.pose-list {
+  list-style: none;
+  padding: 0;
+  margin: 0 0 10px 0;
+  max-height: 180px;
+  overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: var(--grid) var(--pane);
+}
+.pose-list::-webkit-scrollbar { width: 4px; }
+.pose-list::-webkit-scrollbar-thumb { background: var(--grid); }
+
+.pose-row {
+  display: grid;
+  grid-template-columns: 1fr auto auto;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 0;
+  border-bottom: 1px dashed var(--grid);
+  font-size: 11px;
+}
+.pose-row:last-child { border-bottom: 0; }
+.pose-name {
+  color: var(--ink);
+  letter-spacing: 0.04em;
+  text-overflow: ellipsis;
+  overflow: hidden;
+  white-space: nowrap;
+}
+.pose-name::before {
+  content: ">";
+  color: var(--accent);
+  margin-right: 6px;
+  opacity: 0.6;
+}
+.pose-act {
+  background: transparent;
+  border: 1px solid var(--grid);
+  color: var(--mute);
+  font-family: var(--mono);
+  font-size: 9px;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  padding: 4px 8px;
+  border-radius: var(--radius);
+  cursor: pointer;
+  transition: color 0.15s, border-color 0.15s;
+}
+.pose-act.load:hover   { color: var(--accent); border-color: var(--accent-dim); }
+.pose-act.del:hover    { color: var(--alert);  border-color: var(--alert-dim); }
+
+.pose-empty {
+  font-size: 10px;
+  color: var(--dim);
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  padding: 12px 0;
+  text-align: center;
+}
+.pose-empty::before { content: "( "; color: var(--accent); }
+.pose-empty::after  { content: " )"; color: var(--accent); }
+
+.pose-save {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 8px;
+}
+.pose-save input {
+  background: var(--pane2);
+  border: 1px solid var(--grid);
+  color: var(--ink);
+  font-family: var(--mono);
+  font-size: 11px;
+  padding: 8px 10px;
+  border-radius: var(--radius);
+  letter-spacing: 0.05em;
+  transition: border-color 0.15s, background 0.15s;
+}
+.pose-save input::placeholder { color: var(--dim); letter-spacing: 0.15em; text-transform: uppercase; font-size: 10px; }
+.pose-save input:focus {
+  outline: none;
+  border-color: var(--accent-dim);
+  background: var(--bg);
+}
+.pose-save button {
+  background: transparent;
+  border: 1px solid var(--accent-dim);
+  color: var(--accent);
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  padding: 8px 14px;
+  border-radius: var(--radius);
+  cursor: pointer;
+  transition: background 0.15s;
+}
+.pose-save button:hover { background: var(--accent-dim); }
+
+/* ============================================================
+   FOOTER
+   ============================================================ */
+.footer {
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  padding: 0 16px;
+  border-top: 1px solid var(--grid);
+  background: var(--pane);
+  font-size: 10px;
+  color: var(--dim);
+  letter-spacing: 0.08em;
+  overflow: hidden;
+  white-space: nowrap;
+  position: relative;
+}
+.footer.flash { color: var(--alert); }
+.footer.flash .seg { color: var(--alert); }
+.footer .seg {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.footer .seg .k { color: var(--mute); text-transform: uppercase; letter-spacing: 0.15em; font-size: 9px; }
+.footer .seg .v { color: var(--ink); font-variant-numeric: tabular-nums; }
+.footer .seg.accent .v { color: var(--accent); }
+.footer .sep { color: var(--axis); }
+
+.footer .seg.tickers { margin-left: auto; }
+.footer .uptime { color: var(--mute); }
+
+/* ============================================================
+   GENERIC UTIL
+   ============================================================ */
+.kbd {
+  display: inline-block;
+  padding: 1px 5px;
+  border: 1px solid var(--grid);
+  border-radius: 2px;
+  font-size: 9px;
+  color: var(--mute);
+  background: var(--pane2);
+}
+
+.hint {
+  font-size: 9px;
+  letter-spacing: 0.15em;
+  text-transform: uppercase;
+  color: var(--dim);
+  margin-top: 8px;
+}
+
+/* Loading skeleton — visible until first /state */
+.boot {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 5;
+  pointer-events: none;
+  transition: opacity 0.5s var(--ease);
+}
+.boot.gone { opacity: 0; }
+.boot-inner {
+  font-size: 11px;
+  letter-spacing: 0.35em;
+  color: var(--accent);
+  text-transform: uppercase;
+}
+.boot-inner .blink { animation: blink 1s steps(2,end) infinite; }
+</style>
+</head>
+<body>
+
+<div class="frame">
+
+  <!-- ============ TOP RAIL ============ -->
+  <header class="toprail">
+    <div class="brand">maxarm<span class="slash">/</span><span class="sys">console</span></div>
+    <div class="toprail-mid" id="link-status">
+      <span class="pulse"></span><span class="pulse-label">link · </span><span id="link-state">connecting</span>
+    </div>
+    <div class="toprail-right">
+      <span><span style="color:var(--mute)">arm </span><b id="rail-arm">maxarm</b></span>
+      <span><span style="color:var(--mute)">dof </span><b id="rail-dof">4</b></span>
+      <span><span style="color:var(--mute)">reach </span><b id="rail-reach">--</b></span>
+    </div>
+  </header>
+
+  <!-- ============ MAIN ============ -->
+  <main class="main">
+
+    <!-- ====== VIEWER ====== -->
+    <div class="viewer">
+      <canvas id="scene"></canvas>
+
+      <div class="viewer-corners"></div>
+      <div class="viewer-corners-b"></div>
+
+      <div class="viewer-hud tl">
+        <span class="row"><span class="k">view ·</span> <span class="v" id="view-az">--</span> <span class="k">az</span> <span class="v" id="view-el">--</span> <span class="k">el</span></span>
+        <span class="row"><span class="k">zoom ·</span> <span class="v" id="view-zoom">--</span></span>
+      </div>
+
+      <div class="viewer-hud bl">
+        <span class="row"><span class="k">tip ·</span> <span class="accent" id="hud-tip">--, --, --</span> <span class="k">mm</span></span>
+        <span class="row"><span class="k">nozzle ·</span> <span class="v" id="hud-nozzle">--</span> <span class="k">deg</span></span>
+      </div>
+
+      <div class="viewer-tools">
+        <button class="viewer-btn" data-toggle="grid" id="t-grid">grid</button>
+        <button class="viewer-btn" data-toggle="bounds" id="t-bounds">bounds</button>
+        <button class="viewer-btn" data-toggle="trail" id="t-trail">trail</button>
+        <button class="viewer-btn" id="t-reset">reset</button>
+      </div>
+
+      <div class="banner" id="offline-banner">
+        <div class="banner-inner">
+          armsim offline<span class="blink">_</span>
+          <span class="line2">start ./run.sh 7071 to bring the bus up</span>
+        </div>
+      </div>
+
+      <div class="boot" id="boot">
+        <div class="boot-inner">init · uplink<span class="blink">_</span></div>
+      </div>
+    </div>
+
+    <!-- ====== PANEL ====== -->
+    <aside class="panel">
+
+      <!-- HOME -->
+      <section class="section">
+        <button class="btn-home" id="btn-home" aria-label="home">
+          home
+          <span class="sub">return tip to (0, -163, 212)</span>
+        </button>
+        <div class="hint"><span class="kbd">H</span> &nbsp;hot-key</div>
+      </section>
+
+      <!-- JOINT PULSES -->
+      <section class="section">
+        <div class="section-head">
+          <div class="section-title">joint pulses</div>
+          <div class="section-meta">commit on release</div>
+        </div>
+        <div id="sliders"></div>
+      </section>
+
+      <!-- REACH -->
+      <section class="section">
+        <div class="section-head">
+          <div class="section-title">reach · xyz</div>
+          <div class="section-meta">mm · world frame</div>
+        </div>
+        <div class="reach-grid">
+          <div class="reach-cell">
+            <label><span class="ax">x</span>right</label>
+            <input type="number" id="rx" step="1" value="0">
+          </div>
+          <div class="reach-cell">
+            <label><span class="ax">y</span>forward</label>
+            <input type="number" id="ry" step="1" value="-163">
+          </div>
+          <div class="reach-cell">
+            <label><span class="ax">z</span>up</label>
+            <input type="number" id="rz" step="1" value="212">
+          </div>
+        </div>
+        <div class="reach-actions">
+          <button class="btn-reach" id="btn-reach">[ reach ]</button>
+          <button class="btn-reach-home" id="btn-reach-fill">fill tip</button>
+        </div>
+        <div class="reach-status" id="reach-status">
+          <span class="lbl">idle</span>
+        </div>
+      </section>
+
+      <!-- SUCTION -->
+      <section class="section">
+        <div class="section-head">
+          <div class="section-title">suction</div>
+          <div class="section-meta">pump · valve</div>
+        </div>
+        <div class="suction-grid">
+          <button class="suction-btn" data-cmd="on">pump on</button>
+          <button class="suction-btn" data-cmd="vent">vent</button>
+          <button class="suction-btn" data-cmd="off">close</button>
+        </div>
+        <div class="suction-state" id="suction-state" data-state="off">
+          <span class="dot"></span><span id="suction-label">off</span>
+        </div>
+        <div class="hint"><span class="kbd">space</span> &nbsp;toggle pump on/off</div>
+      </section>
+
+      <!-- POSES -->
+      <section class="section">
+        <div class="section-head">
+          <div class="section-title">named poses</div>
+          <div class="section-meta"><span id="pose-count">0</span> saved</div>
+        </div>
+        <ul class="pose-list" id="pose-list"></ul>
+        <div class="pose-save">
+          <input type="text" id="pose-name" placeholder="name this pose" maxlength="32" />
+          <button id="btn-save">save</button>
+        </div>
+      </section>
+
+    </aside>
+  </main>
+
+  <!-- ============ FOOTER ============ -->
+  <footer class="footer" id="footer">
+    <span class="seg"><span class="k">pulses</span><span class="v" id="f-pulses">[ -- -- -- -- ]</span></span>
+    <span class="sep">·</span>
+    <span class="seg"><span class="k">joints</span><span class="v" id="f-joints">[ -- -- -- -- ]°</span></span>
+    <span class="sep">·</span>
+    <span class="seg accent"><span class="k">tip</span><span class="v" id="f-tip">(--, --, --) mm</span></span>
+    <span class="sep">·</span>
+    <span class="seg"><span class="k">suction</span><span class="v" id="f-suction">--</span></span>
+    <span class="seg tickers"><span class="k">uptime</span><span class="uptime" id="f-uptime">00:00:00</span></span>
+  </footer>
+
+</div>
+
+<script>
+/* ============================================================
+   maxarm.console — runtime
+   ============================================================ */
+
+// ---------- config ----------
+const POLL_MS    = 200;
+const TRAIL_MAX  = 30;
+const SCENE_BG   = "#0a0e0f";
+const COL_GRID   = "#172123";
+const COL_AXIS   = "#324546";
+const COL_INK    = "#d8e0e2";
+const COL_DIM    = "#5c706e";
+const COL_MUTE   = "#7a8e8c";
+const COL_ACCENT = "#65f068";
+const COL_ALERT  = "#ff6b3d";
+const COL_AXIS_X = "#7a5151";
+const COL_AXIS_Y = "#517a59";
+const COL_AXIS_Z = "#51677a";
+
+// ---------- joint definitions ----------
+const JOINTS = [
+  { id: 1, key: "p1",    label: "p1",    name: "base_yaw",     min: 0,   max: 1000, home: 500  },
+  { id: 2, key: "p2",    label: "p2",    name: "shoulder",     min: 0,   max: 700,  home: 500  },
+  { id: 3, key: "p3",    label: "p3",    name: "elbow",        min: 470, max: 1000, home: 500  },
+  { id: 4, key: "p4_us", label: "p4_us", name: "nozzle_wrist", min: 500, max: 2500, home: 1500 }
+];
+
+// ---------- state ----------
+let state = null;              // latest /state response
+let lastStateRaw = "";         // for diff
+let trail = [];                // array of [x,y,z]
+let pendingDrag = null;        // {key, value}
+let bootStart = performance.now();
+let firstStateAt = null;
+let online = false;
+let flashTimer = null;
+let footerFlashTimer = null;
+
+// View toggles
+let showGrid = true;
+let showBounds = true;
+let showTrail = true;
+
+// Camera (orbit)
+const cam = {
+  target: [0, -80, 120],
+  // azimuth: 0 along +X, increasing CCW from above
+  az: -Math.PI / 4,            // 45° toward -Y/+X — looks at arm from front-right
+  el:  Math.PI / 6,            // 30° down (positive = looking from above)
+  dist: 520,
+  fov: 45 * Math.PI / 180
+};
+const camDefault = JSON.parse(JSON.stringify(cam));
+
+// ---------- DOM refs ----------
+const $ = sel => document.querySelector(sel);
+const canvas = $("#scene");
+const ctx    = canvas.getContext("2d");
+let DPR = Math.max(1, Math.min(window.devicePixelRatio || 1, 2));
+let W = 0, H = 0;
+
+// ---------- canvas sizing ----------
+function resize() {
+  const r = canvas.getBoundingClientRect();
+  W = Math.floor(r.width);
+  H = Math.floor(r.height);
+  canvas.width  = Math.floor(W * DPR);
+  canvas.height = Math.floor(H * DPR);
+  ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+}
+window.addEventListener("resize", resize);
+
+// ---------- 3D math (minimal column-vector helpers) ----------
+function vadd(a, b) { return [a[0]+b[0], a[1]+b[1], a[2]+b[2]]; }
+function vsub(a, b) { return [a[0]-b[0], a[1]-b[1], a[2]-b[2]]; }
+function vscale(a, s) { return [a[0]*s, a[1]*s, a[2]*s]; }
+function vlen(a) { return Math.hypot(a[0], a[1], a[2]); }
+function vnorm(a) { const l = vlen(a); return l > 1e-9 ? vscale(a, 1/l) : [0,0,0]; }
+function vcross(a, b) {
+  return [a[1]*b[2]-a[2]*b[1], a[2]*b[0]-a[0]*b[2], a[0]*b[1]-a[1]*b[0]];
+}
+function vdot(a, b) { return a[0]*b[0]+a[1]*b[1]+a[2]*b[2]; }
+
+// Camera world->view: place eye at target + spherical offset, look at target.
+// Convention: az rotates around Z; el lifts above XY plane.
+function camPos() {
+  const ca = Math.cos(cam.az), sa = Math.sin(cam.az);
+  const ce = Math.cos(cam.el), se = Math.sin(cam.el);
+  return [
+    cam.target[0] + cam.dist * ca * ce,
+    cam.target[1] + cam.dist * sa * ce,
+    cam.target[2] + cam.dist * se
+  ];
+}
+
+// Build right/up/forward basis (view space)
+function viewBasis() {
+  const eye = camPos();
+  const fwd = vnorm(vsub(cam.target, eye)); // looking from eye to target
+  const wUp = [0, 0, 1];
+  let right = vnorm(vcross(fwd, wUp));
+  if (vlen(right) < 1e-6) right = [1, 0, 0];
+  const up    = vnorm(vcross(right, fwd));
+  return { eye, fwd, right, up };
+}
+
+// project world point to screen: returns {x, y, depth, vis}
+function project(p, basis) {
+  const v = vsub(p, basis.eye);
+  const x = vdot(v, basis.right);
+  const y = vdot(v, basis.up);
+  const z = vdot(v, basis.fwd); // depth along forward
+  if (z <= 0.01) return { x: 0, y: 0, depth: z, vis: false };
+  const f = (H * 0.5) / Math.tan(cam.fov * 0.5);
+  const sx =  x * f / z + W * 0.5;
+  const sy = -y * f / z + H * 0.5;
+  return { x: sx, y: sy, depth: z, vis: true };
+}
+
+// ---------- 3D primitives ----------
+function strokeLine3(basis, a, b, opts) {
+  const pa = project(a, basis);
+  const pb = project(b, basis);
+  if (!pa.vis || !pb.vis) return;
+  ctx.strokeStyle = opts.color || COL_INK;
+  ctx.lineWidth   = opts.width || 1;
+  if (opts.dash) ctx.setLineDash(opts.dash); else ctx.setLineDash([]);
+  ctx.globalAlpha = opts.alpha != null ? opts.alpha : 1;
+  ctx.beginPath();
+  ctx.moveTo(pa.x, pa.y);
+  ctx.lineTo(pb.x, pb.y);
+  ctx.stroke();
+  ctx.globalAlpha = 1;
+  ctx.setLineDash([]);
+}
+
+function dot3(basis, p, opts) {
+  const pp = project(p, basis);
+  if (!pp.vis) return;
+  ctx.fillStyle = opts.color || COL_INK;
+  ctx.globalAlpha = opts.alpha != null ? opts.alpha : 1;
+  // size scales with distance
+  const r = (opts.size || 4) * Math.max(0.3, Math.min(2.5, 400 / pp.depth));
+  ctx.beginPath();
+  ctx.arc(pp.x, pp.y, r, 0, Math.PI * 2);
+  ctx.fill();
+  if (opts.glow) {
+    ctx.shadowBlur = opts.glow;
+    ctx.shadowColor = opts.color || COL_INK;
+    ctx.beginPath();
+    ctx.arc(pp.x, pp.y, r * 0.85, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.shadowBlur = 0;
+  }
+  ctx.globalAlpha = 1;
+}
+
+// Cylinder along Z, axis from p0 to p1, n side strokes
+function strokeCylinder(basis, p0, p1, radius, opts) {
+  // direction of axis
+  const ax = vnorm(vsub(p1, p0));
+  // build perpendicular basis on axis
+  let upRef = Math.abs(ax[2]) < 0.95 ? [0, 0, 1] : [1, 0, 0];
+  const u = vnorm(vcross(ax, upRef));
+  const v = vnorm(vcross(ax, u));
+  const sides = opts.sides || 12;
+  const color = opts.color || COL_DIM;
+  const fill  = opts.fill;
+  // build rings
+  const ring0 = [], ring1 = [];
+  for (let i = 0; i < sides; i++) {
+    const t = (i / sides) * Math.PI * 2;
+    const c = Math.cos(t) * radius;
+    const s = Math.sin(t) * radius;
+    const off = vadd(vscale(u, c), vscale(v, s));
+    ring0.push(vadd(p0, off));
+    ring1.push(vadd(p1, off));
+  }
+  // collect projections, sort by depth for painter
+  const proj0 = ring0.map(p => project(p, basis));
+  const proj1 = ring1.map(p => project(p, basis));
+  // fill quads back-to-front
+  if (fill) {
+    const quads = [];
+    for (let i = 0; i < sides; i++) {
+      const j = (i + 1) % sides;
+      const d = (proj0[i].depth + proj0[j].depth + proj1[i].depth + proj1[j].depth) / 4;
+      quads.push({ d, i, j });
+    }
+    quads.sort((a, b) => b.d - a.d);
+    for (const q of quads) {
+      if (!proj0[q.i].vis || !proj0[q.j].vis || !proj1[q.i].vis || !proj1[q.j].vis) continue;
+      // shading: dot of side-normal with view
+      const sideNormal = vnorm(vadd(
+        vscale(u, Math.cos((q.i / sides) * Math.PI * 2 + Math.PI / sides)),
+        vscale(v, Math.sin((q.i / sides) * Math.PI * 2 + Math.PI / sides))
+      ));
+      const shade = Math.max(0, vdot(sideNormal, basis.fwd) * -1) * 0.6 + 0.4;
+      ctx.fillStyle = mixColor(fill, "#000000", 1 - shade);
+      ctx.beginPath();
+      ctx.moveTo(proj0[q.i].x, proj0[q.i].y);
+      ctx.lineTo(proj0[q.j].x, proj0[q.j].y);
+      ctx.lineTo(proj1[q.j].x, proj1[q.j].y);
+      ctx.lineTo(proj1[q.i].x, proj1[q.i].y);
+      ctx.closePath();
+      ctx.fill();
+    }
+  }
+  // stroke top + bottom rings + a few verticals
+  ctx.strokeStyle = color;
+  ctx.lineWidth   = opts.width || 1;
+  ctx.globalAlpha = opts.alpha != null ? opts.alpha : 0.85;
+  // top ring
+  ctx.beginPath();
+  for (let i = 0; i < sides; i++) {
+    const p = proj1[i];
+    if (i === 0) ctx.moveTo(p.x, p.y); else ctx.lineTo(p.x, p.y);
+  }
+  ctx.closePath(); ctx.stroke();
+  // bottom ring
+  ctx.beginPath();
+  for (let i = 0; i < sides; i++) {
+    const p = proj0[i];
+    if (i === 0) ctx.moveTo(p.x, p.y); else ctx.lineTo(p.x, p.y);
+  }
+  ctx.closePath(); ctx.stroke();
+  // a few verticals (every 1/4)
+  const skip = Math.max(1, Math.floor(sides / 6));
+  for (let i = 0; i < sides; i += skip) {
+    ctx.beginPath();
+    ctx.moveTo(proj0[i].x, proj0[i].y);
+    ctx.lineTo(proj1[i].x, proj1[i].y);
+    ctx.stroke();
+  }
+  ctx.globalAlpha = 1;
+}
+
+// mix two hex colors; t in [0,1] = how much of c2
+function mixColor(c1, c2, t) {
+  const a = hex2rgb(c1), b = hex2rgb(c2);
+  const r = Math.round(a[0] + (b[0] - a[0]) * t);
+  const g = Math.round(a[1] + (b[1] - a[1]) * t);
+  const bl = Math.round(a[2] + (b[2] - a[2]) * t);
+  return `rgb(${r},${g},${bl})`;
+}
+function hex2rgb(h) {
+  if (h.startsWith("rgb")) {
+    const m = h.match(/\d+/g);
+    return [parseInt(m[0]), parseInt(m[1]), parseInt(m[2])];
+  }
+  const x = h.replace("#","");
+  return [parseInt(x.substr(0,2),16), parseInt(x.substr(2,2),16), parseInt(x.substr(4,2),16)];
+}
+
+// ---------- rendering: scene ----------
+function drawScene(basis) {
+  // 1. world grid (XY plane at z=0)
+  if (showGrid) {
+    drawGrid(basis);
+  }
+
+  // 2. axis triad at origin
+  drawAxes(basis);
+
+  // 3. workspace bounds
+  if (showBounds) {
+    drawBounds(basis);
+  }
+
+  // 4. arm itself
+  if (state && state.fk) {
+    drawArm(basis);
+  }
+
+  // 5. trail
+  if (showTrail) {
+    drawTrail(basis);
+  }
+}
+
+function drawGrid(basis) {
+  // grid extent: -200 to +200, spacing 20mm (10mm too dense; brief says ~10mm but readability)
+  const ext = 240;
+  const step = 20;
+  ctx.lineWidth = 1;
+  // depth-sort lines for fading
+  const lines = [];
+  for (let x = -ext; x <= ext; x += step) {
+    lines.push({ a: [x, -ext, 0], b: [x, ext, 0], major: x === 0 });
+  }
+  for (let y = -ext; y <= ext; y += step) {
+    lines.push({ a: [-ext, y, 0], b: [ext, y, 0], major: y === 0 });
+  }
+  for (const ln of lines) {
+    if (ln.major) continue; // major drawn after
+    strokeLine3(basis, ln.a, ln.b, { color: COL_GRID, width: 1, alpha: 0.55 });
+  }
+  // major (origin axes on grid)
+  for (const ln of lines) {
+    if (!ln.major) continue;
+    strokeLine3(basis, ln.a, ln.b, { color: COL_AXIS, width: 1, alpha: 0.9 });
+  }
+}
+
+function drawAxes(basis) {
+  // World axes at origin, length 60mm.
+  strokeLine3(basis, [0,0,0], [60,0,0], { color: COL_AXIS_X, width: 1.5, alpha: 0.9 });
+  strokeLine3(basis, [0,0,0], [0,60,0], { color: COL_AXIS_Y, width: 1.5, alpha: 0.9 });
+  strokeLine3(basis, [0,0,0], [0,0,60], { color: COL_AXIS_Z, width: 1.5, alpha: 0.9 });
+  // labels
+  labelAt(basis, [66, 0, 0], "x", COL_AXIS_X);
+  labelAt(basis, [0, 66, 0], "y", COL_AXIS_Y);
+  labelAt(basis, [0, 0, 66], "z", COL_AXIS_Z);
+}
+
+function labelAt(basis, p, text, col) {
+  const pp = project(p, basis);
+  if (!pp.vis) return;
+  ctx.fillStyle = col;
+  ctx.font = "10px " + getComputedStyle(document.body).fontFamily;
+  ctx.fillText(text, pp.x + 3, pp.y + 3);
+}
+
+function drawBounds(basis) {
+  // ceiling plane at z = z_max = 225
+  const lims = state && state.limits ? state.limits : { z_max: 225, xy_min_radius: 50 };
+  const zMax = lims.z_max;
+  const rMin = lims.xy_min_radius;
+  const reach = 290; // approximate outer reach
+
+  // Ceiling: dashed square
+  const c1 = [-reach, -reach, zMax];
+  const c2 = [ reach, -reach, zMax];
+  const c3 = [ reach,  reach, zMax];
+  const c4 = [-reach,  reach, zMax];
+  const ceilOpts = { color: COL_AXIS, width: 1, alpha: 0.6, dash: [4, 4] };
+  strokeLine3(basis, c1, c2, ceilOpts);
+  strokeLine3(basis, c2, c3, ceilOpts);
+  strokeLine3(basis, c3, c4, ceilOpts);
+  strokeLine3(basis, c4, c1, ceilOpts);
+
+  // Inner singularity cylinder at xy_radius = rMin, going from z=0 to z=zMax
+  const cylOpts = { sides: 16, color: COL_AXIS, width: 1, alpha: 0.4 };
+  // draw two rings + verticals manually for nicer look
+  drawRing(basis, [0,0,0],     rMin, cylOpts);
+  drawRing(basis, [0,0,zMax],  rMin, cylOpts);
+  // outer reach footprint ring on floor
+  drawRing(basis, [0,0,0], reach, { color: COL_AXIS, width: 1, alpha: 0.3, dash: [3,5] });
+}
+
+function drawRing(basis, center, radius, opts) {
+  const sides = opts.sides || 32;
+  const pts = [];
+  for (let i = 0; i < sides; i++) {
+    const t = (i / sides) * Math.PI * 2;
+    pts.push([center[0] + Math.cos(t) * radius, center[1] + Math.sin(t) * radius, center[2]]);
+  }
+  for (let i = 0; i < sides; i++) {
+    const j = (i + 1) % sides;
+    strokeLine3(basis, pts[i], pts[j], opts);
+  }
+}
+
+function drawArm(basis) {
+  const fk = state.fk;
+  const base     = fk.base     || [0, 0, 0];
+  const shoulder = fk.shoulder || [0, 0, 84.4];
+  const elbow    = fk.elbow;
+  const wrist    = fk.wrist;
+  const tip      = fk.tip;
+  if (!elbow || !wrist || !tip) return;
+
+  // Base column cylinder
+  strokeCylinder(basis,
+    base, shoulder,
+    15,
+    { sides: 16, color: COL_DIM, fill: "#15201f", width: 1, alpha: 0.85 }
+  );
+
+  // Shoulder pivot dot (CRT green, small)
+  dot3(basis, shoulder, { color: COL_ACCENT, size: 4, glow: 6, alpha: 0.9 });
+
+  // Upper arm: shoulder → elbow (thick line + thin parallel)
+  drawArmSegment(basis, shoulder, elbow, COL_INK, 3);
+  // Elbow pivot dot
+  dot3(basis, elbow, { color: COL_ACCENT, size: 3, glow: 4, alpha: 0.9 });
+
+  // Forearm: elbow → wrist
+  drawArmSegment(basis, elbow, wrist, COL_INK, 3);
+  // Wrist pivot dot
+  dot3(basis, wrist, { color: COL_ACCENT, size: 3, glow: 4, alpha: 0.9 });
+
+  // Nozzle stub: wrist → tip (the L4 horizontal offset)
+  drawArmSegment(basis, wrist, tip, COL_MUTE, 2);
+
+  // Nozzle wrist roll indicator: a perpendicular tick at the wrist,
+  // rotated about the wrist-to-tip axis by nozzle_deg.
+  drawNozzleIndicator(basis, wrist, tip, state.nozzle_deg || 0);
+
+  // Suction tip — colored by state
+  const sucState = state.suction || "off";
+  let tipCol = COL_DIM, tipGlow = 0, tipSize = 5;
+  if (sucState === "on")      { tipCol = COL_ACCENT; tipGlow = 14; tipSize = 6; }
+  else if (sucState === "venting") { tipCol = COL_ALERT;  tipGlow = 10; tipSize = 6; }
+  dot3(basis, tip, { color: tipCol, size: tipSize, glow: tipGlow, alpha: 1 });
+
+  // Ground shadow under tip (faint ellipse on z=0)
+  const shadow = [tip[0], tip[1], 0];
+  const sp = project(shadow, basis);
+  if (sp.vis) {
+    ctx.fillStyle = "rgba(101,240,104,0.04)";
+    ctx.beginPath();
+    ctx.ellipse(sp.x, sp.y + 1, 14, 4, 0, 0, Math.PI * 2);
+    ctx.fill();
+  }
+}
+
+function drawArmSegment(basis, a, b, color, thickness) {
+  const pa = project(a, basis);
+  const pb = project(b, basis);
+  if (!pa.vis || !pb.vis) return;
+  // outer shadow line (slightly darker, wider)
+  ctx.strokeStyle = "#1f2c2c";
+  ctx.lineWidth = thickness + 2;
+  ctx.lineCap = "round";
+  ctx.beginPath();
+  ctx.moveTo(pa.x, pa.y);
+  ctx.lineTo(pb.x, pb.y);
+  ctx.stroke();
+  // inner highlight
+  ctx.strokeStyle = color;
+  ctx.lineWidth = thickness;
+  ctx.beginPath();
+  ctx.moveTo(pa.x, pa.y);
+  ctx.lineTo(pb.x, pb.y);
+  ctx.stroke();
+  ctx.lineCap = "butt";
+}
+
+function drawNozzleIndicator(basis, wrist, tip, nozDeg) {
+  // axis = unit vector from wrist to tip (this is the suction-nozzle direction)
+  const ax = vnorm(vsub(tip, wrist));
+  // build perpendicular basis. We want a "tick" that sits perpendicular to ax,
+  // and rotates around ax by nozDeg.
+  // Reference perpendicular: world Z if ax is mostly horizontal, else world X.
+  let ref = Math.abs(ax[2]) < 0.85 ? [0, 0, 1] : [1, 0, 0];
+  const u = vnorm(vcross(ax, ref));
+  const v = vnorm(vcross(ax, u));
+  const a = nozDeg * Math.PI / 180;
+  const tickLen = 18;
+  const c = Math.cos(a), s = Math.sin(a);
+  const dir = vadd(vscale(u, c), vscale(v, s));
+  // place tick at midpoint between wrist and tip
+  const mid = vscale(vadd(wrist, tip), 0.5);
+  const t1 = vadd(mid, vscale(dir,  tickLen));
+  const t2 = vadd(mid, vscale(dir, -tickLen));
+  strokeLine3(basis, t1, t2, { color: COL_ACCENT, width: 1.5, alpha: 0.85 });
+  dot3(basis, t1, { color: COL_ACCENT, size: 2.5, alpha: 0.9 });
+  dot3(basis, t2, { color: COL_DIM, size: 2.5, alpha: 0.6 });
+}
+
+function drawTrail(basis) {
+  if (trail.length < 2) return;
+  for (let i = 1; i < trail.length; i++) {
+    const a = trail[i - 1], b = trail[i];
+    const alpha = (i / trail.length) * 0.7;
+    strokeLine3(basis, a, b, { color: COL_ACCENT, width: 1, alpha: alpha });
+  }
+}
+
+// ---------- render loop ----------
+function frame() {
+  // clear
+  ctx.fillStyle = SCENE_BG;
+  ctx.fillRect(0, 0, W, H);
+
+  // subtle vignette
+  const grad = ctx.createRadialGradient(W/2, H/2, Math.min(W,H)*0.2, W/2, H/2, Math.max(W,H)*0.7);
+  grad.addColorStop(0, "rgba(0,0,0,0)");
+  grad.addColorStop(1, "rgba(0,0,0,0.35)");
+  ctx.fillStyle = grad;
+  ctx.fillRect(0, 0, W, H);
+
+  // crosshair at center (tactical accent)
+  ctx.strokeStyle = "rgba(101,240,104,0.06)";
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(W/2 - 18, H/2); ctx.lineTo(W/2 - 4, H/2);
+  ctx.moveTo(W/2 + 4,  H/2); ctx.lineTo(W/2 + 18, H/2);
+  ctx.moveTo(W/2, H/2 - 18); ctx.lineTo(W/2, H/2 - 4);
+  ctx.moveTo(W/2, H/2 + 4);  ctx.lineTo(W/2, H/2 + 18);
+  ctx.stroke();
+
+  const basis = viewBasis();
+  drawScene(basis);
+
+  // viewer HUD numbers
+  $("#view-az").textContent   = (cam.az * 180 / Math.PI).toFixed(0) + "°";
+  $("#view-el").textContent   = (cam.el * 180 / Math.PI).toFixed(0) + "°";
+  $("#view-zoom").textContent = cam.dist.toFixed(0) + "mm";
+
+  requestAnimationFrame(frame);
+}
+
+// ---------- camera controls ----------
+let drag = null;
+canvas.addEventListener("mousedown", e => {
+  drag = { x: e.clientX, y: e.clientY, az: cam.az, el: cam.el };
+});
+window.addEventListener("mousemove", e => {
+  if (!drag) return;
+  const dx = e.clientX - drag.x;
+  const dy = e.clientY - drag.y;
+  cam.az = drag.az - dx * 0.005;
+  cam.el = Math.max(-Math.PI/2 + 0.05, Math.min(Math.PI/2 - 0.05, drag.el + dy * 0.005));
+});
+window.addEventListener("mouseup", () => { drag = null; });
+
+canvas.addEventListener("wheel", e => {
+  e.preventDefault();
+  const f = Math.exp(e.deltaY * 0.0015);
+  cam.dist = Math.max(120, Math.min(1500, cam.dist * f));
+}, { passive: false });
+
+// touch
+let touchState = null;
+canvas.addEventListener("touchstart", e => {
+  if (e.touches.length === 1) {
+    touchState = { mode: "rotate", x: e.touches[0].clientX, y: e.touches[0].clientY, az: cam.az, el: cam.el };
+  } else if (e.touches.length === 2) {
+    const dx = e.touches[0].clientX - e.touches[1].clientX;
+    const dy = e.touches[0].clientY - e.touches[1].clientY;
+    touchState = { mode: "pinch", d0: Math.hypot(dx, dy), dist0: cam.dist };
+  }
+}, { passive: true });
+canvas.addEventListener("touchmove", e => {
+  if (!touchState) return;
+  if (touchState.mode === "rotate" && e.touches.length === 1) {
+    const dx = e.touches[0].clientX - touchState.x;
+    const dy = e.touches[0].clientY - touchState.y;
+    cam.az = touchState.az - dx * 0.005;
+    cam.el = Math.max(-Math.PI/2 + 0.05, Math.min(Math.PI/2 - 0.05, touchState.el + dy * 0.005));
+  } else if (touchState.mode === "pinch" && e.touches.length === 2) {
+    const dx = e.touches[0].clientX - e.touches[1].clientX;
+    const dy = e.touches[0].clientY - e.touches[1].clientY;
+    const d = Math.hypot(dx, dy);
+    cam.dist = Math.max(120, Math.min(1500, touchState.dist0 * (touchState.d0 / d)));
+  }
+}, { passive: true });
+canvas.addEventListener("touchend", () => { touchState = null; }, { passive: true });
+
+// reset
+$("#t-reset").addEventListener("click", () => {
+  Object.assign(cam, JSON.parse(JSON.stringify(camDefault)));
+});
+
+// toggle buttons
+function bindToggle(id, getter, setter) {
+  const btn = $("#" + id);
+  if (getter()) btn.classList.add("on");
+  btn.addEventListener("click", () => {
+    setter(!getter());
+    btn.classList.toggle("on", getter());
+  });
+}
+bindToggle("t-grid",   () => showGrid,   v => showGrid = v);
+bindToggle("t-bounds", () => showBounds, v => showBounds = v);
+bindToggle("t-trail",  () => showTrail,  v => showTrail = v);
+
+// ---------- API ----------
+async function api(path, params) {
+  const qs = params ? ("?" + Object.entries(params).map(([k,v]) => `${k}=${encodeURIComponent(v)}`).join("&")) : "";
+  const url = path + qs;
+  try {
+    const res = await fetch(url, { cache: "no-store" });
+    if (!res.ok) throw new Error("HTTP " + res.status);
+    const json = await res.json();
+    return json;
+  } catch (e) {
+    flashError(e.message || String(e));
+    throw e;
+  }
+}
+
+async function fetchState() {
+  try {
+    const s = await api("/state");
+    applyState(s);
+    if (!online) {
+      online = true;
+      $("#link-status").classList.remove("offline");
+      $("#link-state").textContent = "online";
+      $("#offline-banner").classList.remove("show");
+    }
+    if (!firstStateAt) {
+      firstStateAt = performance.now();
+      const boot = $("#boot");
+      boot.classList.add("gone");
+      setTimeout(() => boot.style.display = "none", 600);
+    }
+  } catch (e) {
+    if (online) {
+      online = false;
+      $("#link-status").classList.add("offline");
+      $("#link-state").textContent = "offline";
+      $("#offline-banner").classList.add("show");
+    } else if (performance.now() - bootStart > 2000) {
+      // never got a state after 2s — show offline banner too
+      $("#link-status").classList.add("offline");
+      $("#link-state").textContent = "offline";
+      $("#offline-banner").classList.add("show");
+    }
+  }
+}
+
+function applyState(s) {
+  if (!s) return;
+  const raw = JSON.stringify(s);
+  if (raw === lastStateRaw) return;
+  lastStateRaw = raw;
+  state = s;
+
+  // trail
+  if (s.fk && s.fk.tip) {
+    const tip = s.fk.tip;
+    const last = trail[trail.length - 1];
+    if (!last || Math.hypot(tip[0]-last[0], tip[1]-last[1], tip[2]-last[2]) > 1.0) {
+      trail.push([tip[0], tip[1], tip[2]]);
+      if (trail.length > TRAIL_MAX) trail.shift();
+    }
+  }
+
+  // top rail meta
+  $("#rail-arm").textContent = s.arm || "--";
+  $("#rail-dof").textContent = s.dof != null ? s.dof : "--";
+  $("#rail-reach").textContent = s.reachable === 1 ? "ok" : (s.reachable === 0 ? "no" : "--");
+
+  // sliders
+  updateSliders(s);
+
+  // suction state
+  updateSuction(s);
+
+  // viewer hud
+  if (s.fk && s.fk.tip) {
+    const t = s.fk.tip;
+    $("#hud-tip").textContent = fmtV3(t);
+  }
+  $("#hud-nozzle").textContent = (s.nozzle_deg != null) ? s.nozzle_deg.toFixed(1) : "--";
+
+  // footer
+  updateFooter(s);
+}
+
+function fmtV3(v) {
+  return v.map(x => Math.round(x * 10) / 10).join(", ");
+}
+
+function updateFooter(s) {
+  const p = s.pulses || [];
+  const d = s.joints_deg || [];
+  const t = s.fk && s.fk.tip ? s.fk.tip : null;
+  $("#f-pulses").textContent = "[ " + p.map(x => Math.round(x)).join(" ") + " ]";
+  $("#f-joints").textContent = "[ " + d.map(x => x.toFixed(1)).join(" ") + " ]°";
+  $("#f-tip").textContent    = t ? `(${t[0].toFixed(1)}, ${t[1].toFixed(1)}, ${t[2].toFixed(1)}) mm` : "--";
+  $("#f-suction").textContent = s.suction || "--";
+}
+
+// ---------- sliders ----------
+function buildSliders() {
+  const wrap = $("#sliders");
+  wrap.innerHTML = "";
+  for (const j of JOINTS) {
+    const row = document.createElement("div");
+    row.className = "slider-row";
+    row.innerHTML = `
+      <div class="slider-head">
+        <span class="name"><span class="id">j${j.id}</span>${j.name}</span>
+        <span class="vals">
+          <span class="pulse" data-pulse="${j.key}">${j.home}</span>
+          <span class="deg" data-deg="${j.key}">--</span>
+        </span>
+      </div>
+      <input type="range" class="slider" data-key="${j.key}"
+             min="${j.min}" max="${j.max}" step="1" value="${j.home}" />
+      <div class="slider-scale">
+        <span>${j.min}</span>
+        <span>${j.label}</span>
+        <span>${j.max}</span>
+      </div>
+    `;
+    wrap.appendChild(row);
+    const inp = row.querySelector("input");
+
+    // live update visual fill while dragging
+    const updateFill = () => {
+      const t = (parseInt(inp.value) - j.min) / (j.max - j.min);
+      inp.style.setProperty("--fill", (t * 100) + "%");
+      row.querySelector(`[data-pulse="${j.key}"]`).textContent = inp.value;
+    };
+    updateFill();
+
+    inp.addEventListener("input", () => {
+      updateFill();
+      pendingDrag = { key: j.key, value: inp.value };
+    });
+    inp.addEventListener("change", () => {
+      commitJointFromSliders();
+    });
+  }
+}
+
+function updateSliders(s) {
+  // don't fight the user while they're dragging
+  for (const j of JOINTS) {
+    if (pendingDrag && pendingDrag.key === j.key) continue;
+    const inp = document.querySelector(`input[data-key="${j.key}"]`);
+    if (!inp) continue;
+    let val;
+    if (j.key === "p4_us") {
+      val = s.pulses[3];
+    } else {
+      val = s.pulses[j.id - 1];
+    }
+    if (val == null) continue;
+    inp.value = Math.round(val);
+    const t = (parseInt(inp.value) - j.min) / (j.max - j.min);
+    inp.style.setProperty("--fill", (t * 100) + "%");
+    document.querySelector(`[data-pulse="${j.key}"]`).textContent = Math.round(val);
+    const deg = s.joints_deg && s.joints_deg[j.id - 1];
+    if (deg != null) {
+      document.querySelector(`[data-deg="${j.key}"]`).textContent = deg.toFixed(1);
+    }
+  }
+}
+
+async function commitJointFromSliders() {
+  const params = {};
+  for (const j of JOINTS) {
+    const inp = document.querySelector(`input[data-key="${j.key}"]`);
+    params[j.key] = inp.value;
+  }
+  pendingDrag = null;
+  try {
+    const s = await api("/pose", params);
+    applyState(s);
+  } catch (e) {
+    /* flashError handled by api() */
+  }
+}
+
+// ---------- reach ----------
+$("#btn-reach").addEventListener("click", async () => {
+  const x = parseFloat($("#rx").value);
+  const y = parseFloat($("#ry").value);
+  const z = parseFloat($("#rz").value);
+  if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(z)) {
+    setReachStatus("bad", "invalid input — need three numbers");
+    return;
+  }
+  setReachStatus(null, `solving · (${x}, ${y}, ${z}) mm…`);
+  try {
+    const s = await api("/reach", { x, y, z });
+    applyState(s);
+    const r = s.reachable;
+    const p = s.pulses || [];
+    if (r === 1) {
+      setReachStatus("ok",
+        `reachable · pulses [${p.map(v => Math.round(v)).join(" ")}]`
+      );
+    } else {
+      setReachStatus("bad",
+        `clamped · pulses [${p.map(v => Math.round(v)).join(" ")}] — pose outside workspace`
+      );
+    }
+  } catch (e) {
+    setReachStatus("bad", e.message || "request failed");
+  }
+});
+$("#btn-reach-fill").addEventListener("click", () => {
+  if (state && state.fk && state.fk.tip) {
+    $("#rx").value = state.fk.tip[0].toFixed(0);
+    $("#ry").value = state.fk.tip[1].toFixed(0);
+    $("#rz").value = state.fk.tip[2].toFixed(0);
+    setReachStatus(null, "filled with current tip");
+  }
+});
+
+function setReachStatus(kind, text) {
+  const el = $("#reach-status");
+  el.classList.remove("ok", "bad");
+  if (kind) el.classList.add(kind);
+  el.innerHTML = `<span class="lbl">${kind || "·"}</span><span class="v">${text}</span>`;
+}
+
+// ---------- suction ----------
+document.querySelectorAll(".suction-btn").forEach(b => {
+  b.addEventListener("click", async () => {
+    const cmd = b.dataset.cmd;
+    try {
+      const s = await api("/suction", { cmd });
+      applyState(s);
+    } catch (e) {}
+  });
+});
+
+function updateSuction(s) {
+  const sucState = s.suction || "off";
+  const wrap = $("#suction-state");
+  wrap.dataset.state = sucState;
+  $("#suction-label").textContent = sucState;
+  document.querySelectorAll(".suction-btn").forEach(b => {
+    b.classList.remove("active-on", "active-vent", "active-off");
+    if (b.dataset.cmd === "on"   && sucState === "on")      b.classList.add("active-on");
+    if (b.dataset.cmd === "vent" && sucState === "venting") b.classList.add("active-vent");
+    if (b.dataset.cmd === "off"  && sucState === "off")     b.classList.add("active-off");
+  });
+}
+
+// ---------- poses ----------
+async function refreshPoses() {
+  try {
+    const res = await fetch("/poses", { cache: "no-store" });
+    if (!res.ok) throw new Error("HTTP " + res.status);
+    const poses = await res.json();
+    renderPoses(poses);
+  } catch (e) {
+    renderPoses([]);
+  }
+}
+
+function renderPoses(poses) {
+  const ul = $("#pose-list");
+  $("#pose-count").textContent = poses.length;
+  ul.innerHTML = "";
+  if (!poses.length) {
+    const li = document.createElement("li");
+    li.className = "pose-empty";
+    li.textContent = "no saved poses";
+    ul.appendChild(li);
+    return;
+  }
+  for (const p of poses) {
+    const li = document.createElement("li");
+    li.className = "pose-row";
+    const name = (p.name || "").replace(/[<>&]/g, c => ({"<":"&lt;",">":"&gt;","&":"&amp;"}[c]));
+    li.innerHTML = `
+      <span class="pose-name" title="${name}">${name}</span>
+      <button class="pose-act load" data-name="${name}">[ load ]</button>
+      <button class="pose-act del"  data-name="${name}">x</button>
+    `;
+    ul.appendChild(li);
+  }
+  ul.querySelectorAll(".pose-act.load").forEach(b => {
+    b.addEventListener("click", async () => {
+      try {
+        const s = await api("/poses/load", { name: b.dataset.name });
+        applyState(s);
+      } catch (e) {}
+    });
+  });
+  ul.querySelectorAll(".pose-act.del").forEach(b => {
+    b.addEventListener("click", async () => {
+      try {
+        await fetch("/poses/delete?name=" + encodeURIComponent(b.dataset.name), { cache: "no-store" });
+        refreshPoses();
+      } catch (e) { flashError(e.message); }
+    });
+  });
+}
+
+$("#btn-save").addEventListener("click", async () => {
+  const name = $("#pose-name").value.trim();
+  if (!name) {
+    flashError("name required");
+    return;
+  }
+  try {
+    await fetch("/poses/save?name=" + encodeURIComponent(name), { cache: "no-store" });
+    $("#pose-name").value = "";
+    refreshPoses();
+  } catch (e) { flashError(e.message); }
+});
+$("#pose-name").addEventListener("keydown", e => {
+  if (e.key === "Enter") $("#btn-save").click();
+  if (e.key === "Escape") $("#pose-name").value = "";
+});
+
+// ---------- HOME ----------
+$("#btn-home").addEventListener("click", async () => {
+  try {
+    const s = await api("/home");
+    applyState(s);
+    trail.length = 0;
+  } catch (e) {}
+});
+
+// ---------- keyboard ----------
+document.addEventListener("keydown", async e => {
+  // skip if typing in an input
+  const t = e.target;
+  if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA")) {
+    if (e.key === "Escape") t.blur();
+    return;
+  }
+  if (e.key === "h" || e.key === "H") {
+    $("#btn-home").click();
+  } else if (e.key === "Escape") {
+    document.activeElement && document.activeElement.blur && document.activeElement.blur();
+  } else if (e.code === "Space") {
+    e.preventDefault();
+    // off -> on -> off (skip venting unless coming from on)
+    if (!state) return;
+    const cur = state.suction;
+    let cmd;
+    if (cur === "off")         cmd = "on";
+    else if (cur === "on")     cmd = "vent";
+    else                       cmd = "off";
+    try {
+      const s = await api("/suction", { cmd });
+      applyState(s);
+    } catch (err) {}
+  }
+});
+
+// ---------- error flash ----------
+function flashError(msg) {
+  const f = $("#footer");
+  f.classList.add("flash");
+  // also show in reach-status if it's empty-ish
+  if (footerFlashTimer) clearTimeout(footerFlashTimer);
+  footerFlashTimer = setTimeout(() => {
+    f.classList.remove("flash");
+  }, 1000);
+  // dim line at left of footer
+  console.warn("[maxarm]", msg);
+}
+
+// ---------- uptime ----------
+function updateUptime() {
+  if (!firstStateAt) {
+    $("#f-uptime").textContent = "--:--:--";
+    return;
+  }
+  const sec = Math.floor((performance.now() - firstStateAt) / 1000);
+  const hh = String(Math.floor(sec / 3600)).padStart(2, "0");
+  const mm = String(Math.floor((sec % 3600) / 60)).padStart(2, "0");
+  const ss = String(sec % 60).padStart(2, "0");
+  $("#f-uptime").textContent = `${hh}:${mm}:${ss}`;
+}
+
+// ---------- boot ----------
+function init() {
+  resize();
+  buildSliders();
+  setReachStatus(null, "ready");
+  fetchState();
+  refreshPoses();
+  setInterval(fetchState, POLL_MS);
+  setInterval(refreshPoses, 4000);
+  setInterval(updateUptime, 1000);
+  requestAnimationFrame(frame);
+}
+
+if (document.readyState === "loading") {
+  document.addEventListener("DOMContentLoaded", init);
+} else {
+  init();
+}
+</script>
+
+</body>
+</html>

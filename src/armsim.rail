@@ -1,0 +1,571 @@
+-- armsim.rail -- MaxArm 4-DOF simulator, Rail-native
+--
+-- Geometry from arms/maxarm.json (firmware-canonical from
+-- github.com/Hiwonder/MaxArm Arduino _espmax.h). FK/IK ported
+-- byte-for-byte from _espmax.cpp.
+--
+-- Compile:  ./rail_native src/armsim.rail
+-- Install:  cp /tmp/rail_out /tmp/armsim_handler && chmod +x /tmp/armsim_handler
+-- Serve:    python3 serve.py 7071
+
+import "stdlib/math.rail"
+import "stdlib/env.rail"
+
+-- ═════ Geometry reference (mm) -- mirrors arms/maxarm.json ═════
+-- NOTE: Rail v5 miscompiles binary ops touching top-level float
+-- constants (returns garbage like 1.11e+226). Geometry values are
+-- inlined as literals at every use-site below; this block is for
+-- humans only.
+--    l0=84.4 l1=8.14 l2=128.4 l3=138.0 l4=16.8
+--    z_max_mm=225.0  xy_min_mm=50.0
+--    pi=3.14159265358979  2pi=6.28318530717958
+--    deg2rad=0.01745329251994  rad2deg=57.29577951308232
+--    yaw_offset=2.61799387799149 (= 150 deg in rad)
+
+-- ═════ Pulse clamps (matches espmax.py set_servo_in_range) ═════
+j1_p_lo = 0
+j1_p_hi = 1000
+j2_p_lo = 0
+j2_p_hi = 700
+j3_p_lo = 470
+j3_p_hi = 1000
+j4_us_lo = 500
+j4_us_hi = 2500
+
+-- Home pose pulses
+home_p1     = 500
+home_p2     = 500
+home_p3     = 500
+home_p4_us  = 1500
+home_suction = 0   -- 0=off, 1=on, 2=venting
+
+-- ═════ State paths ═════
+req_path   = "/tmp/armsim_req.txt"
+state_path = "/tmp/armsim_state.txt"
+poses_path = "/tmp/armsim_poses.txt"
+html_path  = "/tmp/armsim_index.html"
+
+-- ═════ Number formatting helpers ═════
+c_to_d c =
+  if c == "0" then 0 else if c == "1" then 1 else if c == "2" then 2
+  else if c == "3" then 3 else if c == "4" then 4 else if c == "5" then 5
+  else if c == "6" then 6 else if c == "7" then 7 else if c == "8" then 8
+  else if c == "9" then 9 else 0 - 1
+
+pi_acc cs acc =
+  if cs == [] then acc
+  else
+    let c = head cs
+    let d = c_to_d c
+    if d < 0 then acc
+    else pi_acc (tail cs) (acc * 10 + d)
+
+parse_int_signed s =
+  let cs = chars s
+  if cs == [] then 0
+  else if head cs == "-" then 0 - pi_acc (tail cs) 0
+  else pi_acc cs 0
+
+clamp_int lo hi x = if x < lo then lo else if x > hi then hi else x
+
+float_round f =
+  let half = 0.5
+  if f > 0.0 - 0.000001 then float_to_int (f + half)
+  else 0 - (float_to_int (0.0 - f + half))
+
+-- ═════ HTTP request parsing ═════
+crlf = shell "printf '\\r\\n'"
+
+http_request_line req =
+  let lines = str_split "\n" req
+  if lines == [] then "" else head lines
+
+http_path_with_query req =
+  let parts = str_split " " (http_request_line req)
+  if length parts < 2 then "/"
+  else head (tail parts)
+
+strip_query p =
+  let parts = str_split "?" p
+  head parts
+
+extract_query p =
+  let parts = str_split "?" p
+  if length parts < 2 then ""
+  else head (tail parts)
+
+qp_search pairs key =
+  if pairs == [] then 0
+  else
+    let kv = str_split "=" (head pairs)
+    if length kv < 2 then qp_search (tail pairs) key
+    else if head kv == key then parse_int_signed (head (tail kv))
+    else qp_search (tail pairs) key
+
+qp_get q key = qp_search (str_split "&" q) key
+
+qp_search_str pairs key =
+  if pairs == [] then ""
+  else
+    let kv = str_split "=" (head pairs)
+    if length kv < 2 then qp_search_str (tail pairs) key
+    else if head kv == key then head (tail kv)
+    else qp_search_str (tail pairs) key
+
+qp_get_str q key = qp_search_str (str_split "&" q) key
+
+-- ═════ Pulse <-> joint-degree conversion (firmware _espmax.cpp) ═════
+-- pulse 0..1000 maps to joint-frame degrees with per-joint offsets.
+-- Joint 2 is INVERTED.
+
+pulse_to_deg_j1 p =
+  let pf = to_float p
+  pf * 240.0 / 1000.0
+
+pulse_to_deg_j2 p =
+  let pf = to_float p
+  let neg_scale = 0.0 - 240.0
+  pf * neg_scale / 1000.0 + 210.0
+
+pulse_to_deg_j3 p =
+  let pf = to_float p
+  pf * 240.0 / 1000.0 - 120.0
+
+deg_to_pulse_j1 a = a * 1000.0 / 240.0
+
+deg_to_pulse_j2 a =
+  let neg_scale = 0.0 - 240.0
+  (a - 210.0) * 1000.0 / neg_scale
+
+deg_to_pulse_j3 a = (a + 120.0) * 1000.0 / 240.0
+
+-- PWM nozzle servo: 500-2500 us maps to -90..+90 deg
+us_to_deg_nozzle us =
+  let usf = to_float us
+  let scale = 1000.0
+  (usf - 1500.0) * 90.0 / scale
+
+deg_to_us_nozzle deg = 1500.0 + deg * 1000.0 / 90.0
+
+-- ═════ Trig helpers ═════
+-- All top-const-free per v5 miscompile workaround.
+
+deg_to_rad d = d * 0.01745329251994
+
+rad_to_deg r = r * 57.29577951308232
+
+acos_safe x =
+  if x > 1.0 then 0.0
+  else if x < 0.0 - 1.0 then 3.14159265358979
+  else
+    let xsq = pow x 2.0
+    atan2 (sqrt (1.0 - xsq)) x
+
+-- ═════ Forward kinematics -- port of _espmax.cpp:forward ═════
+-- Returns (sh_x, sh_y, sh_z, el_x, el_y, el_z, wr_x, wr_y, wr_z, tl_x, tl_y, tl_z).
+--
+-- Geometry recap:
+--   - Base column rises in +z from origin to height L0.
+--   - Shoulder pivot is at radial distance L1 from base axis, height L0.
+--   - Upper arm (L2) goes from shoulder; angle from horizontal = pi - alpha2.
+--   - Forearm (L3) goes from elbow; planar combine gives side_beta + alpha.
+--   - Wrist at (L1 + side_beta*cos(alpha), L0 + side_beta*sin(alpha)) in arm plane.
+--   - Tip = wrist + (L4, 0) in arm plane.
+--   - World x_world = -r * cos(alpha1)  (firmware negates x)
+--     World y_world =  r * sin(alpha1)
+--
+-- Note: alpha2 here is in radians from the j2_deg conversion.
+
+fk_full p1 p2 p3 =
+  -- Local copies of constants -- v5 miscompiles top-const in binary ops.
+  let l0_l = 84.4
+  let l1_l = 8.14
+  let l2_l = 128.4
+  let l3_l = 138.0
+  let l4_l = 16.8
+  let pi_l = 3.14159265358979
+  let two_pi_l = 6.28318530717958
+  let yaw_l = 2.61799387799149
+  let a1d = pulse_to_deg_j1 p1
+  let a2d = pulse_to_deg_j2 p2
+  let a3d = pulse_to_deg_j3 p3
+  let alpha1_raw = (deg_to_rad a1d) + yaw_l
+  let alpha1 = if alpha1_raw > two_pi_l then alpha1_raw - two_pi_l else alpha1_raw
+  let alpha2 = deg_to_rad a2d
+  let alpha3 = deg_to_rad a3d
+  let beta = alpha2 - alpha3
+  let cos_beta = cos beta
+  let l2sq = pow l2_l 2.0
+  let l3sq = pow l3_l 2.0
+  let two_l2_l3 = 2.0 * 128.4 * 138.0
+  let side_beta_sq = l2sq + l3sq - two_l2_l3 * cos_beta
+  let side_beta = sqrt side_beta_sq
+  let two_l2_sb = 2.0 * side_beta * 128.4
+  let cos_gamma_raw = (side_beta_sq + l2sq - l3sq) / two_l2_sb
+  let cos_gamma = if cos_gamma_raw > 1.0 then 1.0 else cos_gamma_raw
+  let gamma = acos_safe cos_gamma
+  let alpha_gamma = pi_l - alpha2
+  let alpha = alpha_gamma - gamma
+  let cos_a1 = cos alpha1
+  let sin_a1 = sin alpha1
+  -- Shoulder pivot (arm plane: r=L1, z=L0)
+  let sh_r = l1_l
+  let sh_x = 0.0 - sh_r * cos_a1
+  let sh_y = sh_r * sin_a1
+  let sh_z = l0_l
+  -- Elbow: upper arm tip in arm plane
+  let cos_a2 = cos alpha2
+  let sin_a2 = sin alpha2
+  let el_r = l1_l - l2_l * cos_a2
+  let el_x = 0.0 - el_r * cos_a1
+  let el_y = el_r * sin_a1
+  let el_z = l0_l + l2_l * sin_a2
+  -- Wrist
+  let cos_alpha = cos alpha
+  let sin_alpha = sin alpha
+  let wr_r_planar = side_beta * cos_alpha
+  let wr_r = l1_l + wr_r_planar
+  let wr_x = 0.0 - wr_r * cos_a1
+  let wr_y = wr_r * sin_a1
+  let wr_z = l0_l + side_beta * sin_alpha
+  -- Tip
+  let tl_r = wr_r + l4_l
+  let tl_x = 0.0 - tl_r * cos_a1
+  let tl_y = tl_r * sin_a1
+  let tl_z = wr_z
+  (sh_x, sh_y, sh_z, el_x, el_y, el_z, wr_x, wr_y, wr_z, tl_x, tl_y, tl_z)
+
+-- ═════ Inverse kinematics -- port of _espmax.cpp:inverse ═════
+-- Returns (a1_deg, a2_deg, a3_deg, reachable).
+
+ik_theta1 x y =
+  let pi_l = 3.14159265358979
+  let two_pi_l = 6.28318530717958
+  if x == 0.0 then
+    if y > 0.0 - 0.000001 then pi_l / 2.0
+    else
+      let three_halves = 1.5
+      pi_l * three_halves
+  else if y == 0.0 then
+    if x > 0.0 then 0.0
+    else pi_l
+  else
+    let t = atan2 y x
+    if t < 0.0 then t + two_pi_l else t
+
+ik_solve x_in y_in z_in =
+  let l0_l = 84.4
+  let l1_l = 8.14
+  let l2_l = 128.4
+  let l3_l = 138.0
+  let l4_l = 16.8
+  let pi_l = 3.14159265358979
+  let x = 0.0 - x_in
+  let y = y_in
+  let z = z_in - l0_l
+  let theta1 = ik_theta1 x y
+  let xsq = pow x 2.0
+  let ysq = pow y 2.0
+  let r_xy = sqrt (xsq + ysq)
+  let r = r_xy - l1_l - l4_l
+  let rsq = pow r 2.0
+  let zsq = pow z 2.0
+  let r2z2 = rsq + zsq
+  let dist = sqrt r2z2
+  let l2sq = pow l2_l 2.0
+  let l3sq = pow l3_l 2.0
+  if dist > 266.4 then (0.0, 0.0, 0.0, 0)
+  else if r < 0.000001 then (0.0, 0.0, 0.0, 0)
+  else
+    let alpha = atan2 z r
+    let two_l2_l3 = 2.0 * 128.4 * 138.0
+    let beta_num = l2sq + l3sq - r2z2
+    let beta_arg = beta_num / two_l2_l3
+    let beta = acos_safe beta_arg
+    let two_l2_dist = 2.0 * 128.4 * dist
+    let gamma_num = l2sq + r2z2 - l3sq
+    let gamma_arg = gamma_num / two_l2_dist
+    let gamma = acos_safe gamma_arg
+    let theta2 = pi_l - (alpha + gamma)
+    let theta3 = pi_l - (alpha + beta + gamma)
+    let angles_raw = rad_to_deg theta1
+    let angles_norm = if angles_raw < 30.000001 then angles_raw + 360.0 else angles_raw
+    let angle1 = angles_norm - 150.0
+    let angle2 = rad_to_deg theta2
+    let angle3 = rad_to_deg theta3
+    (angle1, angle2, angle3, 1)
+
+-- ═════ State persistence (5 lines: p1 p2 p3 p4_us suction) ═════
+load_state _ =
+  let content = read_file state_path
+  if length content == 0 then (home_p1, home_p2, home_p3, home_p4_us, home_suction)
+  else
+    let lines = str_split "\n" content
+    if length lines < 5 then (home_p1, home_p2, home_p3, home_p4_us, home_suction)
+    else
+      let p1 = parse_int_signed (head lines)
+      let p2 = parse_int_signed (head (tail lines))
+      let p3 = parse_int_signed (head (tail (tail lines)))
+      let p4 = parse_int_signed (head (tail (tail (tail lines))))
+      let su = parse_int_signed (head (tail (tail (tail (tail lines)))))
+      (p1, p2, p3, p4, su)
+
+save_state p1 p2 p3 p4 su =
+  let body = join "\n" [show p1, show p2, show p3, show p4, show su, ""]
+  let _ = write_file state_path body
+  0
+
+-- ═════ Suction state mapping ═════
+suction_label s =
+  if s == 1 then "on"
+  else if s == 2 then "venting"
+  else "off"
+
+-- ═════ JSON building ═════
+sf x = show_float x
+
+state_json p1 p2 p3 p4 su reach =
+  let (sh_x, sh_y, sh_z, el_x, el_y, el_z, wr_x, wr_y, wr_z, tl_x, tl_y, tl_z) = fk_full p1 p2 p3
+  let d1 = pulse_to_deg_j1 p1
+  let d2 = pulse_to_deg_j2 p2
+  let d3 = pulse_to_deg_j3 p3
+  let d4 = us_to_deg_nozzle p4
+  let s_lbl = suction_label su
+  join "" [
+    "{",
+    "\"arm\":\"maxarm\",",
+    "\"dof\":4,",
+    "\"pulses\":[", show p1, ",", show p2, ",", show p3, ",", show p4, "],",
+    "\"joints_deg\":[", sf d1, ",", sf d2, ",", sf d3, ",", sf d4, "],",
+    "\"fk\":{",
+      "\"base\":[0,0,0],",
+      "\"shoulder\":[", sf sh_x, ",", sf sh_y, ",", sf sh_z, "],",
+      "\"elbow\":[",    sf el_x, ",", sf el_y, ",", sf el_z, "],",
+      "\"wrist\":[",    sf wr_x, ",", sf wr_y, ",", sf wr_z, "],",
+      "\"tip\":[",      sf tl_x, ",", sf tl_y, ",", sf tl_z, "]",
+    "},",
+    "\"nozzle_deg\":", sf d4, ",",
+    "\"suction\":\"", s_lbl, "\",",
+    "\"links_mm\":[84.4,8.14,128.4,138.0,16.8],",
+    "\"limits\":{\"z_max\":225,\"xy_min_radius\":50},",
+    "\"reachable\":", show reach,
+    "}"]
+
+state_json_current _ =
+  let (p1, p2, p3, p4, su) = load_state 0
+  state_json p1 p2 p3 p4 su 1
+
+-- ═════ HTTP response builder ═════
+http_response status st ct body =
+  let cr = crlf
+  join "" ["HTTP/1.1 ", show status, " ", st, cr,
+          "Content-Type: ", ct, cr,
+          "Content-Length: ", show (length body), cr,
+          "Cache-Control: no-store", cr,
+          "Access-Control-Allow-Origin: *", cr,
+          "Connection: close", cr,
+          "Server: armsim/0.2-maxarm", cr, cr, body]
+
+-- ═════ Route handlers ═════
+route_state _ =
+  http_response 200 "OK" "application/json" (state_json_current 0)
+
+-- /pose?p1=&p2=&p3=&p4_us=
+route_pose q =
+  let (cp1, cp2, cp3, cp4, csu) = load_state 0
+  let raw_p1 = qp_get q "p1"
+  let raw_p2 = qp_get q "p2"
+  let raw_p3 = qp_get q "p3"
+  let raw_p4 = qp_get q "p4_us"
+  -- If a param is absent, qp_get returns 0; we keep current state instead.
+  -- Sentinel: if param string is empty in query, treat as "use current".
+  let q_pairs = str_split "&" q
+  let s_p1 = qp_search_str q_pairs "p1"
+  let s_p2 = qp_search_str q_pairs "p2"
+  let s_p3 = qp_search_str q_pairs "p3"
+  let s_p4 = qp_search_str q_pairs "p4_us"
+  let np1 = if length s_p1 == 0 then cp1 else clamp_int j1_p_lo j1_p_hi raw_p1
+  let np2 = if length s_p2 == 0 then cp2 else clamp_int j2_p_lo j2_p_hi raw_p2
+  let np3 = if length s_p3 == 0 then cp3 else clamp_int j3_p_lo j3_p_hi raw_p3
+  let np4 = if length s_p4 == 0 then cp4 else clamp_int j4_us_lo j4_us_hi raw_p4
+  let _ = save_state np1 np2 np3 np4 csu
+  http_response 200 "OK" "application/json" (state_json np1 np2 np3 np4 csu 1)
+
+-- /reach?x=&y=&z= (mm)
+route_reach q =
+  let (cp1, cp2, cp3, cp4, csu) = load_state 0
+  let x = to_float (qp_get q "x")
+  let y = to_float (qp_get q "y")
+  let z_raw = to_float (qp_get q "z")
+  let z_clamped = if z_raw > 225.0 then 225.0 else z_raw
+  let xsq = pow x 2.0
+  let ysq = pow y 2.0
+  let r_xy = sqrt (xsq + ysq)
+  if r_xy < 50.0 then
+    http_response 200 "OK" "application/json" (state_json cp1 cp2 cp3 cp4 csu 0)
+  else
+    let (a1, a2, a3, ok) = ik_solve x y z_clamped
+    if ok == 0 then
+      http_response 200 "OK" "application/json" (state_json cp1 cp2 cp3 cp4 csu 0)
+    else
+      let raw_p1 = float_round (deg_to_pulse_j1 a1)
+      let raw_p2 = float_round (deg_to_pulse_j2 a2)
+      let raw_p3 = float_round (deg_to_pulse_j3 a3)
+      let np1 = clamp_int j1_p_lo j1_p_hi raw_p1
+      let np2 = clamp_int j2_p_lo j2_p_hi raw_p2
+      let np3 = clamp_int j3_p_lo j3_p_hi raw_p3
+      let _ = save_state np1 np2 np3 cp4 csu
+      http_response 200 "OK" "application/json" (state_json np1 np2 np3 cp4 csu 1)
+
+-- /nozzle?deg=
+route_nozzle q =
+  let (cp1, cp2, cp3, cp4, csu) = load_state 0
+  let deg = qp_get q "deg"
+  let degf = to_float deg
+  let degc = if degf > 90.0 then 90.0
+             else if degf < 0.0 - 90.0 then 0.0 - 90.0
+             else degf
+  let us_f = deg_to_us_nozzle degc
+  let us_i = float_round us_f
+  let np4 = clamp_int j4_us_lo j4_us_hi us_i
+  let _ = save_state cp1 cp2 cp3 np4 csu
+  http_response 200 "OK" "application/json" (state_json cp1 cp2 cp3 np4 csu 1)
+
+-- /suction?cmd=on|vent|off
+route_suction q =
+  let (cp1, cp2, cp3, cp4, csu) = load_state 0
+  let cmd = qp_get_str q "cmd"
+  let nsu = if cmd == "on" then 1
+            else if cmd == "vent" then 2
+            else if cmd == "off" then 0
+            else csu
+  let _ = save_state cp1 cp2 cp3 cp4 nsu
+  http_response 200 "OK" "application/json" (state_json cp1 cp2 cp3 cp4 nsu 1)
+
+-- /home
+route_home _ =
+  let _ = save_state home_p1 home_p2 home_p3 home_p4_us home_suction
+  http_response 200 "OK" "application/json" (state_json home_p1 home_p2 home_p3 home_p4_us home_suction 1)
+
+-- ═════ Named poses ═════
+-- Storage: one line per pose, format `<name> <p1> <p2> <p3> <p4_us> <suction>`.
+
+pose_items_loop lines =
+  if lines == [] then []
+  else
+    let line = head lines
+    if length line == 0 then pose_items_loop (tail lines)
+    else
+      let parts = str_split " " line
+      if length parts < 6 then pose_items_loop (tail lines)
+      else
+        let nm   = head parts
+        let p1s  = head (tail parts)
+        let p2s  = head (tail (tail parts))
+        let p3s  = head (tail (tail (tail parts)))
+        let p4s  = head (tail (tail (tail (tail parts))))
+        let sus  = head (tail (tail (tail (tail (tail parts)))))
+        let item = join "" ["{\"name\":\"", nm,
+                            "\",\"pulses\":[", p1s, ",", p2s, ",", p3s, ",", p4s,
+                            "],\"suction\":\"", suction_label (parse_int_signed sus),
+                            "\"}"]
+        cons item (pose_items_loop (tail lines))
+
+poses_drop_name lines name =
+  if lines == [] then []
+  else
+    let line = head lines
+    if length line == 0 then poses_drop_name (tail lines) name
+    else
+      let parts = str_split " " line
+      if length parts < 6 then poses_drop_name (tail lines) name
+      else if head parts == name then poses_drop_name (tail lines) name
+      else cons line (poses_drop_name (tail lines) name)
+
+poses_find lines name =
+  if lines == [] then ""
+  else
+    let line = head lines
+    if length line == 0 then poses_find (tail lines) name
+    else
+      let parts = str_split " " line
+      if length parts < 6 then poses_find (tail lines) name
+      else if head parts == name then line
+      else poses_find (tail lines) name
+
+route_poses _ =
+  let lines = str_split "\n" (read_file poses_path)
+  let items = pose_items_loop lines
+  let body = join "" ["[", join "," items, "]"]
+  http_response 200 "OK" "application/json" body
+
+route_poses_save q =
+  let name = qp_get_str q "name"
+  if length name == 0 then
+    http_response 400 "Bad Request" "text/plain" "missing name"
+  else
+    let (p1, p2, p3, p4, su) = load_state 0
+    let existing = str_split "\n" (read_file poses_path)
+    let pruned = poses_drop_name existing name
+    let new_line = join " " [name, show p1, show p2, show p3, show p4, show su]
+    let all_lines = append pruned (cons new_line [])
+    let _ = write_file poses_path (join "" [join "\n" all_lines, "\n"])
+    route_poses 0
+
+route_poses_load q =
+  let name = qp_get_str q "name"
+  let lines = str_split "\n" (read_file poses_path)
+  let line = poses_find lines name
+  if length line == 0 then
+    http_response 404 "Not Found" "text/plain" "pose not found"
+  else
+    let parts = str_split " " line
+    let p1 = clamp_int j1_p_lo j1_p_hi (parse_int_signed (head (tail parts)))
+    let p2 = clamp_int j2_p_lo j2_p_hi (parse_int_signed (head (tail (tail parts))))
+    let p3 = clamp_int j3_p_lo j3_p_hi (parse_int_signed (head (tail (tail (tail parts)))))
+    let p4 = clamp_int j4_us_lo j4_us_hi (parse_int_signed (head (tail (tail (tail (tail parts))))))
+    let su = parse_int_signed (head (tail (tail (tail (tail (tail parts))))))
+    let _ = save_state p1 p2 p3 p4 su
+    http_response 200 "OK" "application/json" (state_json p1 p2 p3 p4 su 1)
+
+route_poses_delete q =
+  let name = qp_get_str q "name"
+  let existing = str_split "\n" (read_file poses_path)
+  let pruned = poses_drop_name existing name
+  let body = join "\n" pruned
+  let suffix = if pruned == [] then "" else "\n"
+  let _ = write_file poses_path (join "" [body, suffix])
+  route_poses 0
+
+-- ═════ Index ═════
+route_index _ =
+  let html = read_file html_path
+  if length html == 0 then
+    http_response 500 "Internal Server Error" "text/plain" "armsim: index.html not found"
+  else
+    http_response 200 "OK" "text/html" html
+
+route_404 path =
+  http_response 404 "Not Found" "text/plain" (join "" ["404 ", path])
+
+-- ═════ Main dispatch ═════
+main =
+  let req = read_file req_path
+  let path = http_path_with_query req
+  let plain = strip_query path
+  let query = extract_query path
+  let resp =
+    if plain == "/" then route_index 0
+    else if plain == "/state" then route_state 0
+    else if plain == "/pose" then route_pose query
+    else if plain == "/reach" then route_reach query
+    else if plain == "/nozzle" then route_nozzle query
+    else if plain == "/suction" then route_suction query
+    else if plain == "/home" then route_home 0
+    else if plain == "/poses" then route_poses 0
+    else if plain == "/poses/save" then route_poses_save query
+    else if plain == "/poses/load" then route_poses_load query
+    else if plain == "/poses/delete" then route_poses_delete query
+    else route_404 plain
+  let _ = write_file "/dev/stdout" resp
+  0

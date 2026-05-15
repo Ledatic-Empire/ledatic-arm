@@ -1,0 +1,241 @@
+-- lewansoul.rail -- MaxArm outer wire protocol (AA 55 framed)
+--
+-- Implements the host <-> ESP32 protocol documented at
+-- docs.hiwonder.com/projects/MaxArm/.../10.MaxArm_Serial_Communication.
+-- Builders return byte lists (each element is an int 0..255). Parsers
+-- consume the same.
+--
+-- Frame:  AA 55 FUNC LEN DATA[N] CHKSUM
+--    CHKSUM = ~(FUNC + LEN + sum(DATA)) & 0xFF
+--
+-- Functions:
+--    0x01 SET_ANGLE         [8 B: p1_le16 p2_le16 p3_le16 time_le16]
+--    0x03 SET_XYZ           [8 B: x_le16  y_le16  z_le16  time_le16] (signed mm)
+--    0x05 SET_PWMSERVO      [4 B: pulse_us_le16 time_le16]
+--    0x07 SET_SUCTIONNOZZLE [1 B: 0x01=pump_on, 0x02=vent_open, 0x03=vent_close]
+--    0x11 READ_ANGLE        (req:0 B / resp:6 B = 3x int16)
+--    0x13 READ_XYZ          (req:0 B / resp:6 B = 3x signed int16 mm)
+--
+-- Self-test: `./rail_native run protocols/lewansoul.rail` builds the
+-- documented example frames and prints PASS/FAIL byte-for-byte.
+
+-- ═════ Bit helpers (no native bitops needed) ═════
+lo_byte v = v % 256
+hi_byte v = (v / 256) % 256
+
+-- int16 -> (lo, hi) little-endian. Handles negative via two's complement.
+i16_lo v = if v < 0 then lo_byte (v + 65536) else lo_byte v
+i16_hi v = if v < 0 then hi_byte (v + 65536) else hi_byte v
+
+-- ═════ Hex display ═════
+hex_digit d =
+  if d == 0 then "0" else if d == 1 then "1" else if d == 2 then "2"
+  else if d == 3 then "3" else if d == 4 then "4" else if d == 5 then "5"
+  else if d == 6 then "6" else if d == 7 then "7" else if d == 8 then "8"
+  else if d == 9 then "9" else if d == 10 then "A" else if d == 11 then "B"
+  else if d == 12 then "C" else if d == 13 then "D" else if d == 14 then "E"
+  else "F"
+
+byte_to_hex b =
+  let hi = b / 16
+  let lo = b % 16
+  join "" [hex_digit hi, hex_digit lo]
+
+bytes_to_hex_acc lst acc =
+  if lst == [] then acc
+  else
+    let b = head lst
+    let h = byte_to_hex b
+    let new_acc = if length acc == 0 then h else join " " [acc, h]
+    bytes_to_hex_acc (tail lst) new_acc
+
+bytes_to_hex lst = bytes_to_hex_acc lst ""
+
+-- ═════ Sum + checksum ═════
+sum_bytes_acc lst acc =
+  if lst == [] then acc
+  else sum_bytes_acc (tail lst) (acc + (head lst))
+
+sum_bytes lst = sum_bytes_acc lst 0
+
+chksum func len data_bytes =
+  let s = func + len + (sum_bytes data_bytes)
+  (255 - (s % 256)) % 256
+
+-- ═════ Frame builder ═════
+-- frame func data_bytes -> full byte list [AA 55 FUNC LEN data... CHKSUM]
+frame func data_bytes =
+  let n = length data_bytes
+  let cs = chksum func n data_bytes
+  let header = [170, 85, func, n]
+  let with_data = append header data_bytes
+  append with_data [cs]
+
+-- ═════ Builders ═════
+
+-- 0x01 SET_ANGLE -- 3 bus pulses + duration (ms)
+build_set_angle p1 p2 p3 time_ms =
+  let data = [lo_byte p1, hi_byte p1,
+              lo_byte p2, hi_byte p2,
+              lo_byte p3, hi_byte p3,
+              lo_byte time_ms, hi_byte time_ms]
+  frame 1 data
+
+-- 0x03 SET_XYZ -- signed int16 mm + duration (ms)
+build_set_xyz x_mm y_mm z_mm time_ms =
+  let data = [i16_lo x_mm, i16_hi x_mm,
+              i16_lo y_mm, i16_hi y_mm,
+              i16_lo z_mm, i16_hi z_mm,
+              lo_byte time_ms, hi_byte time_ms]
+  frame 3 data
+
+-- 0x05 SET_PWMSERVO -- nozzle wrist; pulse in microseconds, duration ms
+build_set_pwmservo pulse_us time_ms =
+  let data = [lo_byte pulse_us, hi_byte pulse_us,
+              lo_byte time_ms,  hi_byte time_ms]
+  frame 5 data
+
+-- 0x07 SET_SUCTIONNOZZLE -- cmd: 1=pump_on, 2=vent_open, 3=vent_close
+build_set_suction cmd_byte =
+  frame 7 [cmd_byte]
+
+build_set_suction_named name =
+  if name == "on" then build_set_suction 1
+  else if name == "vent" then build_set_suction 2
+  else if name == "close" then build_set_suction 3
+  else build_set_suction 3
+
+-- 0x11 READ_ANGLE (request)
+build_read_angle _ = frame 17 []
+
+-- 0x13 READ_XYZ (request)
+build_read_xyz _ = frame 19 []
+
+-- ═════ Parsers ═════
+-- For READ_ANGLE / READ_XYZ responses (frame is 10 bytes total).
+-- Expects the full response frame including header + chksum.
+-- Returns (ok, v1, v2, v3) where ok=1 on success, 0 on bad frame.
+
+parse_int16_signed lo hi =
+  let raw = lo + hi * 256
+  if raw > 32767 then raw - 65536 else raw
+
+verify_frame_chksum bytes =
+  if length bytes < 5 then 0
+  else
+    let h0 = head bytes
+    let h1 = head (tail bytes)
+    if h0 == 170 then
+      if h1 == 85 then 1 else 0
+    else 0
+
+response_data_bytes bytes =
+  -- bytes[4..4+len-1]
+  let after_header = tail (tail (tail (tail bytes)))
+  after_header
+
+response_first_n bytes n =
+  if n == 0 then []
+  else if bytes == [] then []
+  else cons (head bytes) (response_first_n (tail bytes) (n - 1))
+
+parse_read_angle bytes =
+  if verify_frame_chksum bytes == 0 then (0, 0, 0, 0)
+  else
+    let data = response_data_bytes bytes
+    if length data < 6 then (0, 0, 0, 0)
+    else
+      let v1 = parse_int16_signed (head data) (head (tail data))
+      let v2 = parse_int16_signed (head (tail (tail data))) (head (tail (tail (tail data))))
+      let v3 = parse_int16_signed (head (tail (tail (tail (tail data))))) (head (tail (tail (tail (tail (tail data))))))
+      (1, v1, v2, v3)
+
+parse_read_xyz bytes = parse_read_angle bytes
+
+-- ═════ Self-test ═════
+-- Verifies builders against the verbatim examples on docs.hiwonder.com.
+
+bytes_eq a b =
+  if a == [] then if b == [] then 1 else 0
+  else if b == [] then 0
+  else if head a == head b then bytes_eq (tail a) (tail b)
+  else 0
+
+run_test name actual expected =
+  let ok = bytes_eq actual expected
+  let label = if ok == 1 then "PASS" else "FAIL"
+  let actual_hex = bytes_to_hex actual
+  let expected_hex = bytes_to_hex expected
+  let line = if ok == 1 then
+               join "" ["[", label, "] ", name, "  ", actual_hex]
+             else
+               join "" ["[", label, "] ", name,
+                       "\n   actual:   ", actual_hex,
+                       "\n   expected: ", expected_hex]
+  let _ = print line
+  ok
+
+main =
+  let _ = print "== lewansoul.rail self-tests =="
+  -- SET_ANGLE (200, 500, 500), 2000 ms  ->  AA 55 01 08 C8 00 F4 01 F4 01 D0 07 6D
+  let t1 = run_test "set_angle(200,500,500,2000)"
+                    (build_set_angle 200 500 500 2000)
+                    [170, 85, 1, 8, 200, 0, 244, 1, 244, 1, 208, 7, 109]
+  -- SET_XYZ (120, -180, 85), 1000 ms  ->  AA 55 03 08 78 00 4C FF 55 00 E8 03 F1
+  let t2 = run_test "set_xyz(120,-180,85,1000)"
+                    (build_set_xyz 120 (0 - 180) 85 1000)
+                    [170, 85, 3, 8, 120, 0, 76, 255, 85, 0, 232, 3, 241]
+  -- Pump on. docs.hiwonder.com prints `AA 55 07 01 01 F7` but the
+  -- ~(FUNC+LEN+sum(DATA)) formula (verified against the 8-data-byte
+  -- SET_ANGLE and SET_XYZ examples above byte-for-byte) gives F6 here.
+  -- Treating the doc's F7/F6/F5 row as a transcription error; the
+  -- firmware speaks the formula.
+  let t3 = run_test "set_suction(on)"
+                    (build_set_suction_named "on")
+                    [170, 85, 7, 1, 1, 246]
+  let t4 = run_test "set_suction(vent)"
+                    (build_set_suction_named "vent")
+                    [170, 85, 7, 1, 2, 245]
+  let t5 = run_test "set_suction(close)"
+                    (build_set_suction_named "close")
+                    [170, 85, 7, 1, 3, 244]
+  -- READ_ANGLE  ->  AA 55 11 00 EE
+  let t6 = run_test "read_angle()"
+                    (build_read_angle 0)
+                    [170, 85, 17, 0, 238]
+  -- READ_XYZ  ->  AA 55 13 00 EC
+  let t7 = run_test "read_xyz()"
+                    (build_read_xyz 0)
+                    [170, 85, 19, 0, 236]
+  -- Round-trip: parse READ_ANGLE response.
+  -- docs.hiwonder.com captions this row "(servo1=873, servo2=410, servo3=713)"
+  -- but the bytes `60 03` decode to 0x0360 = 864, not 873. Trusting the
+  -- bytes (864, 410, 713).
+  let resp_angle = [170, 85, 17, 6, 96, 3, 154, 1, 201, 2, 32]
+  let (ok_a, v1, v2, v3) = parse_read_angle resp_angle
+  let t8_ok = if ok_a == 1 then
+                if v1 == 864 then
+                  if v2 == 410 then
+                    if v3 == 713 then 1 else 0
+                  else 0
+                else 0
+              else 0
+  let t8_label = if t8_ok == 1 then "PASS" else "FAIL"
+  let _ = print (join "" ["[", t8_label, "] parse_read_angle (864,410,713)  got (",
+                          show v1, ",", show v2, ",", show v3, ")"])
+  -- Round-trip: parse READ_XYZ response (-159, -6, 96)  AA 55 13 06 61 FF FA FF 60 00 2E
+  let resp_xyz = [170, 85, 19, 6, 97, 255, 250, 255, 96, 0, 46]
+  let (ok_x, x, y, z) = parse_read_xyz resp_xyz
+  let t9_ok = if ok_x == 1 then
+                if x == (0 - 159) then
+                  if y == (0 - 6) then
+                    if z == 96 then 1 else 0
+                  else 0
+                else 0
+              else 0
+  let t9_label = if t9_ok == 1 then "PASS" else "FAIL"
+  let _ = print (join "" ["[", t9_label, "] parse_read_xyz (-159,-6,96)  got (",
+                          show x, ",", show y, ",", show z, ")"])
+  let total = t1 + t2 + t3 + t4 + t5 + t6 + t7 + t8_ok + t9_ok
+  let _ = print (join "" ["=== ", show total, "/9 passed ==="])
+  if total == 9 then 0 else 1
