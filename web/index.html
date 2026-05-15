@@ -1,0 +1,533 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>armsim · eezybotarm mk2</title>
+<style>
+  :root {
+    --bg:#0a0e0f; --pane:#0e1416; --grid:#172123; --axis:#324546;
+    --ink:#d8e0e2; --dim:#5c706e; --mute:#7a8e8c;
+    --link-up:#7adcb8; --link-fa:#c39bd6; --link-base:#5c706e;
+    --node:#e8f0f2; --ghost:#243c3e;
+    --warn:#d6c87a; --bad:#d67a7a;
+    --envelope:rgba(122,220,184,.08);
+    --envelope-edge:rgba(122,220,184,.18);
+  }
+  * { box-sizing:border-box; }
+  body { margin:0; padding:24px 32px; background:var(--bg); color:var(--ink);
+         font:13px/1.45 ui-monospace,SFMono-Regular,Menlo,monospace; }
+  h1 { font-size:14px; font-weight:500; letter-spacing:.18em; text-transform:uppercase;
+       color:var(--mute); margin:0 0 4px; }
+  .sub { color:var(--dim); font-size:11px; letter-spacing:.1em; margin-bottom:24px; }
+  .wrap { display:flex; gap:32px; align-items:flex-start; flex-wrap:wrap; }
+  .col { display:flex; flex-direction:column; gap:14px; }
+  .label { color:var(--dim); font-size:10px; letter-spacing:.18em; text-transform:uppercase; }
+  canvas { background:var(--pane); border:1px solid #1a2426; display:block; cursor:crosshair; }
+  canvas:hover { border-color:#2a3c3e; }
+  .panel { min-width:340px; max-width:380px; }
+  .ctl { display:grid; grid-template-columns:64px 1fr 56px; gap:8px 10px; align-items:center; }
+  .ctl input[type=range] { width:100%; background:transparent; }
+  .ctl .name { color:var(--mute); font-size:11px; letter-spacing:.1em; text-transform:uppercase; }
+  .ctl .val  { font-variant-numeric:tabular-nums; text-align:right; font-size:13px;
+               transition:color .25s; }
+  .row-btn { display:flex; flex-wrap:wrap; gap:6px; margin-top:6px; }
+  button { background:transparent; color:var(--link-up); border:1px solid #1f2a2c;
+           padding:6px 11px; font:inherit; cursor:pointer; letter-spacing:.1em;
+           text-transform:uppercase; font-size:10px; transition:all .15s; }
+  button:hover { background:#11191b; border-color:#2a3c3e; color:var(--ink); }
+  button.danger { color:var(--bad); }
+  button.danger:hover { background:#1a0e0e; border-color:#3a1f1f; }
+  .kv { display:grid; grid-template-columns:auto auto; gap:4px 18px; font-size:12px;
+        font-variant-numeric:tabular-nums; padding-top:8px;
+        border-top:1px solid #1a2426; margin-top:14px; }
+  .kv .k { color:var(--dim); }
+  .stat { color:var(--mute); font-size:10px; letter-spacing:.1em; margin-top:4px; }
+  .stat .ok { color:var(--link-up); }
+  .stat .err { color:var(--bad); }
+  .stat .warn { color:var(--warn); }
+
+  /* Poses */
+  .poses {
+    padding-top:14px;
+    border-top:1px solid #1a2426;
+    margin-top:12px;
+    display:flex; flex-direction:column; gap:8px;
+  }
+  .poses-chips { display:flex; flex-wrap:wrap; gap:6px; }
+  .chip {
+    display:inline-flex; align-items:center; gap:6px;
+    padding:5px 9px;
+    background:transparent;
+    color:var(--mute);
+    border:1px solid #1f2a2c;
+    font:inherit; font-size:11px; letter-spacing:.04em;
+    cursor:pointer;
+    transition:all .15s;
+    text-transform:none;
+  }
+  .chip:hover { background:#11191b; color:var(--ink); border-color:var(--link-up); }
+  .chip .x {
+    display:none; color:var(--dim);
+    font-size:14px; line-height:1; padding:0 2px;
+    margin-right:-3px;
+  }
+  .chip:hover .x { display:inline; }
+  .chip .x:hover { color:var(--bad); }
+  .pose-save { display:flex; gap:6px; }
+  .pose-save input {
+    flex:1; min-width:0;
+    background:#0e1416; color:var(--ink);
+    border:1px solid #1f2a2c;
+    font:inherit; font-size:11px;
+    padding:6px 9px; outline:none;
+  }
+  .pose-save input:focus { border-color:var(--link-up); }
+</style>
+</head>
+<body>
+  <h1>armsim</h1>
+  <div class="sub">eezybotarm mk2 · rail · phase a · sim only</div>
+  <div class="wrap">
+    <div class="col">
+      <div class="label">side view  ·  r (forward)  ×  z (up)</div>
+      <canvas id="side" width="420" height="420"></canvas>
+      <div class="label">top view  ·  x  ×  y  (looking down)</div>
+      <canvas id="top" width="420" height="420"></canvas>
+    </div>
+    <div class="col panel">
+      <div class="ctl">
+        <span class="name">base</span>
+        <input id="b" type="range" min="-90" max="90" step="1" value="0">
+        <span class="val" id="bv">0°</span>
+
+        <span class="name">shoulder</span>
+        <input id="s" type="range" min="0" max="90" step="1" value="45">
+        <span class="val" id="sv">45°</span>
+
+        <span class="name">elbow</span>
+        <input id="e" type="range" min="-90" max="90" step="1" value="0">
+        <span class="val" id="ev">0°</span>
+      </div>
+      <div class="row-btn">
+        <button id="home">home</button>
+        <button id="zero">all zero</button>
+      </div>
+      <div class="kv">
+        <span class="k">tool xyz</span><span id="tool">—</span>
+        <span class="k">elbow xyz</span><span id="elb">—</span>
+        <span class="k">reach r</span><span id="reach">—</span>
+        <span class="k">links l0/l1/l2</span><span id="links">—</span>
+      </div>
+      <div class="poses">
+        <div class="label">named poses</div>
+        <div class="poses-chips" id="poses-chips"></div>
+        <div class="pose-save">
+          <input id="pose-name" placeholder="new pose name" autocomplete="off"
+                 pattern="[a-zA-Z0-9_-]+" maxlength="24">
+          <button id="pose-save">save current</button>
+        </div>
+      </div>
+      <div class="stat"><span id="status">·</span> &nbsp; <span id="age" class="k">—</span></div>
+    </div>
+  </div>
+
+<script>
+"use strict";
+const $ = id => document.getElementById(id);
+const sideCtx = $("side").getContext("2d");
+const topCtx  = $("top").getContext("2d");
+const W = 420, H = 420;
+const SCALE = 700;                          // m → px
+const ORIGIN_SIDE = { x: 80,  y: 360 };
+const ORIGIN_TOP  = { x: 210, y: 210 };
+const ANIM_MS = 350;
+
+// ─── state ──────────────────────────────────────────────────────────────
+let from = null;       // animation start snapshot
+let to = null;         // animation target (latest server state)
+let displayed = null;  // currently rendered state
+let animStart = 0;
+let lastBeatAt = 0;
+let poses = [];
+let clickMarks = [];
+
+function fmt(n, p=3){ return (n>=0?" ":"") + n.toFixed(p); }
+function easeOutCubic(t){ return 1 - Math.pow(1 - t, 3); }
+function lerp(a, b, t){ return a + (b - a) * t; }
+function lerpArr(a, b, t){ return a.map((v, i) => lerp(v, b[i], t)); }
+
+async function fetchJSON(url){
+  const r = await fetch(url);
+  if (!r.ok) throw new Error(r.status);
+  return await r.json();
+}
+
+// ─── status line ────────────────────────────────────────────────────────
+function setStatus(kind, msg){
+  const s = $("status");
+  s.className = kind;
+  s.textContent = msg;
+  lastBeatAt = Date.now();
+}
+
+// ─── slider/value coloring by limit proximity ───────────────────────────
+function colorJoint(id, val, lo, hi){
+  const range = hi - lo;
+  const distNorm = Math.min(val - lo, hi - val) / range;
+  let color;
+  if (distNorm < 0.04)      color = "var(--bad)";
+  else if (distNorm < 0.12) color = "var(--warn)";
+  else                      color = "var(--ink)";
+  $(id + "v").style.color = color;
+  $(id).style.accentColor =
+    distNorm < 0.04 ? "#d67a7a" :
+    distNorm < 0.12 ? "#d6c87a" : "#7adcb8";
+}
+
+// ─── animation ──────────────────────────────────────────────────────────
+function tick(){
+  if (!from || !to) return;
+  const dt = Math.min(1, (Date.now() - animStart) / ANIM_MS);
+  const t = easeOutCubic(dt);
+  displayed = {
+    joints_deg: from.joints_deg.map((v, i) => Math.round(v + t * (to.joints_deg[i] - v))),
+    shoulder: lerpArr(from.shoulder, to.shoulder, t),
+    elbow:    lerpArr(from.elbow,    to.elbow,    t),
+    tool:     lerpArr(from.tool,     to.tool,     t),
+    links: to.links, reach_max: to.reach_max, reach_min: to.reach_min,
+    reachable: to.reachable, limits_deg: to.limits_deg
+  };
+  drawAll();
+  if (dt < 1) requestAnimationFrame(tick);
+  else displayed = to;
+}
+
+function apply(st){
+  try {
+    if (!displayed){
+      displayed = st;
+      from = st;
+      to = st;
+    } else {
+      from = displayed;
+      to = st;
+      animStart = Date.now();
+      requestAnimationFrame(tick);
+    }
+    // Sliders + readouts reflect the SERVER target (intent), not the animated frame
+    $("b").value = st.joints_deg[0];
+    $("s").value = st.joints_deg[1];
+    $("e").value = st.joints_deg[2];
+    $("bv").textContent = st.joints_deg[0] + "°";
+    $("sv").textContent = st.joints_deg[1] + "°";
+    $("ev").textContent = st.joints_deg[2] + "°";
+    $("tool").textContent = st.tool.map(v => fmt(v)).join(" ");
+    $("elb").textContent  = st.elbow.map(v => fmt(v)).join(" ");
+    $("reach").textContent = fmt(Math.hypot(st.tool[0], st.tool[1])) + " m";
+    $("links").textContent = st.links.map(v => fmt(v, 3)).join(" / ");
+
+    colorJoint("b", st.joints_deg[0], st.limits_deg.base[0],     st.limits_deg.base[1]);
+    colorJoint("s", st.joints_deg[1], st.limits_deg.shoulder[0], st.limits_deg.shoulder[1]);
+    colorJoint("e", st.joints_deg[2], st.limits_deg.elbow[0],    st.limits_deg.elbow[1]);
+
+    if (!displayed.shoulder) drawAll(); // first frame guard
+    setStatus("ok", "live");
+  } catch (err){
+    console.error("apply failed:", err);
+    setStatus("err", "draw err: " + err.message);
+  }
+}
+
+// ─── drawing ────────────────────────────────────────────────────────────
+function drawAll(){
+  if (!displayed) return;
+  drawSide(sideCtx, displayed);
+  drawTop(topCtx, displayed);
+}
+
+function clearPane(ctx){
+  ctx.fillStyle = "#0e1416";
+  ctx.fillRect(0, 0, W, H);
+}
+
+function drawGrid(ctx, origin, step_m=0.05){
+  ctx.strokeStyle = "#172123";
+  ctx.lineWidth = 1;
+  const px = step_m * SCALE;
+  for (let x = origin.x % px; x < W; x += px){
+    ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, H); ctx.stroke();
+  }
+  for (let y = origin.y % px; y < H; y += px){
+    ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(W, y); ctx.stroke();
+  }
+  ctx.strokeStyle = "#324546";
+  ctx.beginPath(); ctx.moveTo(origin.x, 0); ctx.lineTo(origin.x, H); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(0, origin.y); ctx.lineTo(W, origin.y); ctx.stroke();
+}
+
+function drawSide(ctx, st){
+  clearPane(ctx);
+  drawGrid(ctx, ORIGIN_SIDE);
+  const O = ORIGIN_SIDE;
+
+  // Reach envelope: half-disc (r>=0) of radius l1+l2 around shoulder pivot
+  const shPx = { x: O.x, y: O.y - st.shoulder[2] * SCALE };
+  const rMax = st.reach_max * SCALE;
+  ctx.fillStyle = "rgba(122,220,184,.05)";
+  ctx.strokeStyle = "rgba(122,220,184,.18)";
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.arc(shPx.x, shPx.y, rMax, -Math.PI/2, Math.PI/2);
+  ctx.lineTo(shPx.x, shPx.y);
+  ctx.closePath();
+  ctx.fill();
+  ctx.stroke();
+
+  // Project a point (x, y, z) to side view: collapse onto r-z plane
+  const r = (x, y) => Math.hypot(x, y);
+  const p = (x, y, z) => ({ x: O.x + r(x, y) * SCALE, y: O.y - z * SCALE });
+  const baseBot = { x: O.x, y: O.y };
+  const sh = p(st.shoulder[0], st.shoulder[1], st.shoulder[2]);
+  const el = p(st.elbow[0],    st.elbow[1],    st.elbow[2]);
+  const tl = p(st.tool[0],     st.tool[1],     st.tool[2]);
+
+  // base column (ghost)
+  ctx.strokeStyle = "#5c706e";
+  ctx.lineWidth = 6;
+  ctx.beginPath(); ctx.moveTo(baseBot.x, baseBot.y); ctx.lineTo(sh.x, sh.y); ctx.stroke();
+  // upper arm
+  ctx.strokeStyle = "#7adcb8"; ctx.lineWidth = 4;
+  ctx.beginPath(); ctx.moveTo(sh.x, sh.y); ctx.lineTo(el.x, el.y); ctx.stroke();
+  // forearm
+  ctx.strokeStyle = "#c39bd6"; ctx.lineWidth = 4;
+  ctx.beginPath(); ctx.moveTo(el.x, el.y); ctx.lineTo(tl.x, tl.y); ctx.stroke();
+  // joints
+  joint(ctx, baseBot, "#5c706e");
+  joint(ctx, sh, "#e8f0f2");
+  joint(ctx, el, "#e8f0f2");
+  joint(ctx, tl, "#7adcb8");
+  axisLabel(ctx, O, "r", "z");
+  paintMarks(ctx, sideCtx);
+}
+
+function drawTop(ctx, st){
+  clearPane(ctx);
+  drawGrid(ctx, ORIGIN_TOP);
+  const O = ORIGIN_TOP;
+  // Reach envelope: max reach in xy plane is sqrt(reach_max² - (tool_z - shoulder_z)²).
+  // For a static visualization use simply reach_max (worst-case outer ring).
+  ctx.fillStyle = "rgba(122,220,184,.05)";
+  ctx.strokeStyle = "rgba(122,220,184,.18)";
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.arc(O.x, O.y, st.reach_max * SCALE, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.stroke();
+
+  const p = (x, y) => ({ x: O.x + x * SCALE, y: O.y - y * SCALE });
+  const base = { x: O.x, y: O.y };
+  const sh = p(st.shoulder[0], st.shoulder[1]);
+  const el = p(st.elbow[0],    st.elbow[1]);
+  const tl = p(st.tool[0],     st.tool[1]);
+
+  ctx.strokeStyle = "#243c3e"; ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.arc(base.x, base.y, 6, 0, Math.PI*2); ctx.stroke();
+
+  ctx.strokeStyle = "#7adcb8"; ctx.lineWidth = 4;
+  ctx.beginPath(); ctx.moveTo(sh.x, sh.y); ctx.lineTo(el.x, el.y); ctx.stroke();
+  ctx.strokeStyle = "#c39bd6"; ctx.lineWidth = 4;
+  ctx.beginPath(); ctx.moveTo(el.x, el.y); ctx.lineTo(tl.x, tl.y); ctx.stroke();
+  joint(ctx, base, "#5c706e");
+  joint(ctx, el, "#e8f0f2");
+  joint(ctx, tl, "#7adcb8");
+  axisLabel(ctx, O, "x", "y");
+  paintMarks(ctx, topCtx);
+}
+
+function joint(ctx, p, color){
+  ctx.fillStyle = color;
+  ctx.beginPath(); ctx.arc(p.x, p.y, 4, 0, Math.PI*2); ctx.fill();
+}
+
+function axisLabel(ctx, O, hx, vy){
+  ctx.fillStyle = "#324546";
+  ctx.font = "10px ui-monospace,monospace";
+  ctx.fillText(hx, W - 14, O.y - 4);
+  ctx.fillText(vy, O.x + 4, 12);
+}
+
+// ─── click marks (target rings) ─────────────────────────────────────────
+function markClick(canvasCtx, px, py, ok){
+  clickMarks.push({ ctx: canvasCtx, px, py, ok, at: Date.now() });
+}
+function paintMarks(ctx, matchingCtx){
+  const now = Date.now();
+  clickMarks = clickMarks.filter(m => now - m.at < 1500);
+  for (const m of clickMarks){
+    if (m.ctx !== matchingCtx) continue;
+    const age = (now - m.at) / 1500;
+    const alpha = 1 - age;
+    ctx.strokeStyle = m.ok ? `rgba(122,220,184,${alpha})` : `rgba(214,122,122,${alpha})`;
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.arc(m.px, m.py, 5 + age * 16, 0, Math.PI * 2);
+    ctx.stroke();
+  }
+}
+setInterval(() => { if (clickMarks.length && displayed) drawAll(); }, 60);
+
+// ─── server interactions ────────────────────────────────────────────────
+async function push(){
+  const b = +$("b").value, s = +$("s").value, e = +$("e").value;
+  $("bv").textContent = b + "°";
+  $("sv").textContent = s + "°";
+  $("ev").textContent = e + "°";
+  try {
+    const st = await fetchJSON(`/pose?b=${b}&s=${s}&e=${e}`);
+    apply(st);
+  } catch (err){
+    setStatus("err", "POST /pose failed");
+  }
+}
+
+async function pull(){
+  try { apply(await fetchJSON("/state")); }
+  catch (err){ setStatus("err", "GET /state failed: " + err.message); }
+}
+
+async function reachTo(x, y, z, canvasCtx, px, py){
+  const xmm = Math.round(x * 1000);
+  const ymm = Math.round(y * 1000);
+  const zmm = Math.round(z * 1000);
+  try {
+    const st = await fetchJSON(`/reach?x=${xmm}&y=${ymm}&z=${zmm}`);
+    apply(st);
+    markClick(canvasCtx, px, py, st.reachable === 1);
+    if (st.reachable === 0) setStatus("err", "unreachable target");
+    else {
+      const dx = (st.tool[0] - x), dy = (st.tool[1] - y), dz = (st.tool[2] - z);
+      const drift = Math.hypot(dx, dy, dz);
+      if (drift > 0.02) setStatus("warn", `clamped: tool off by ${(drift*1000).toFixed(0)} mm`);
+    }
+  } catch (err){
+    setStatus("err", "/reach failed: " + err.message);
+  }
+}
+
+// ─── named poses ────────────────────────────────────────────────────────
+function renderPoses(){
+  const cont = $("poses-chips");
+  cont.innerHTML = "";
+  for (const p of poses){
+    const chip = document.createElement("button");
+    chip.className = "chip";
+    chip.dataset.name = p.name;
+    chip.innerHTML = `<span>${escapeHTML(p.name)}</span><span class="x" title="delete">×</span>`;
+    chip.querySelector("span:first-child").addEventListener("click", () => loadPose(p.name));
+    chip.querySelector(".x").addEventListener("click", (ev) => {
+      ev.stopPropagation();
+      if (confirm(`delete pose "${p.name}"?`)) deletePose(p.name);
+    });
+    chip.addEventListener("click", () => loadPose(p.name));
+    cont.appendChild(chip);
+  }
+}
+
+function escapeHTML(s){
+  return s.replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"})[c]);
+}
+
+async function refreshPoses(){
+  try { poses = await fetchJSON("/poses"); renderPoses(); }
+  catch (err){ console.warn("poses fetch failed:", err); }
+}
+
+async function loadPose(name){
+  try {
+    const st = await fetchJSON(`/poses/load?name=${encodeURIComponent(name)}`);
+    apply(st);
+  } catch (err){ setStatus("err", `load ${name} failed`); }
+}
+
+async function savePose(){
+  const raw = $("pose-name").value.trim();
+  if (!raw){ setStatus("err", "name required"); return; }
+  if (!/^[A-Za-z0-9_-]+$/.test(raw)){
+    setStatus("err", "letters / digits / _ - only");
+    return;
+  }
+  try {
+    await fetchJSON(`/poses/save?name=${encodeURIComponent(raw)}`);
+    $("pose-name").value = "";
+    await refreshPoses();
+    setStatus("ok", `saved ${raw}`);
+  } catch (err){ setStatus("err", "save failed: " + err.message); }
+}
+
+async function deletePose(name){
+  try {
+    await fetchJSON(`/poses/delete?name=${encodeURIComponent(name)}`);
+    await refreshPoses();
+    setStatus("ok", `deleted ${name}`);
+  } catch (err){ setStatus("err", "delete failed"); }
+}
+
+// ─── wiring ─────────────────────────────────────────────────────────────
+["b","s","e"].forEach(id => $(id).addEventListener("input", push));
+
+$("home").addEventListener("click", () => loadPose("home"));
+$("zero").addEventListener("click", async () => {
+  await fetchJSON("/pose?b=0&s=0&e=0"); pull();
+});
+$("pose-save").addEventListener("click", savePose);
+$("pose-name").addEventListener("keydown", (ev) => {
+  if (ev.key === "Enter"){ ev.preventDefault(); savePose(); }
+});
+
+$("side").addEventListener("click", (ev) => {
+  if (!displayed) return;
+  const rect = ev.target.getBoundingClientRect();
+  const px = ev.clientX - rect.left;
+  const py = ev.clientY - rect.top;
+  const r = (px - ORIGIN_SIDE.x) / SCALE;
+  const z = (ORIGIN_SIDE.y - py) / SCALE;
+  if (r < 0){ setStatus("err", "side click r<0"); return; }
+  const brad = displayed.joints_deg[0] * Math.PI / 180;
+  reachTo(r * Math.cos(brad), r * Math.sin(brad), z, sideCtx, px, py);
+});
+
+$("top").addEventListener("click", (ev) => {
+  if (!displayed) return;
+  const rect = ev.target.getBoundingClientRect();
+  const px = ev.clientX - rect.left;
+  const py = ev.clientY - rect.top;
+  const x = (px - ORIGIN_TOP.x) / SCALE;
+  const y = (ORIGIN_TOP.y - py) / SCALE;
+  reachTo(x, y, displayed.tool[2], topCtx, px, py);
+});
+
+document.addEventListener("keydown", (ev) => {
+  if (ev.target.tagName === "INPUT") return;
+  const map = { a:["b",-1], d:["b",+1], w:["s",+1], s:["s",-1], q:["e",-1], e:["e",+1] };
+  const m = map[ev.key.toLowerCase()];
+  if (!m) return;
+  const [j, d] = m;
+  const el = $(j);
+  el.value = +el.value + d;
+  push();
+});
+
+// ─── heartbeat ──────────────────────────────────────────────────────────
+setInterval(() => {
+  if (!lastBeatAt) return;
+  const dt = ((Date.now() - lastBeatAt) / 1000).toFixed(1);
+  $("age").textContent = dt + "s";
+}, 250);
+
+// ─── boot ───────────────────────────────────────────────────────────────
+pull();
+refreshPoses();
+</script>
+</body>
+</html>

@@ -1,0 +1,26 @@
+{
+  "name": "eezybotarm-mk2",
+  "version": 0,
+  "units": "meters_radians",
+  "links": {
+    "l0": 0.092,
+    "l1": 0.135,
+    "l2": 0.147
+  },
+  "limits_rad": {
+    "base":     [-1.5708,  1.5708],
+    "shoulder": [ 0.0000,  1.5708],
+    "elbow":    [-1.5708,  1.5708]
+  },
+  "home_rad": {
+    "base": 0.0,
+    "shoulder": 0.7854,
+    "elbow": 0.0
+  },
+  "servo": {
+    "channels": { "base": 8, "shoulder": 9, "elbow": 10 },
+    "pwm_min": 125,
+    "pwm_max": 600,
+    "_note": "Servo→joint mapping is Phase B. Calibrate against hardware; do not trust these defaults."
+  }
+}
