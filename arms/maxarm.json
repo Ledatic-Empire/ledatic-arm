@@ -1,0 +1,88 @@
+{
+  "_schema_version": "1.0",
+  "_authored": "2026-05-15",
+  "_source": "github.com/Hiwonder/MaxArm firmware (Arduino + Python) and docs.hiwonder.com",
+  "_calibration_status": "pre-delivery — all values from firmware source; measure on delivery day",
+  "_reference_doc": "docs/MAXARM_REFERENCE.md",
+
+  "id": "maxarm",
+  "brand": "Hiwonder",
+  "alt_brand": "LewanSoul",
+  "model": "MaxArm",
+  "dof": 4,
+
+  "links_mm": {
+    "L0_base_column":     84.4,
+    "L1_shoulder_offset":  8.14,
+    "L2_upper_arm":      128.4,
+    "L3_forearm":        138.0,
+    "L4_wrist_to_tip":    16.8,
+    "_source": "Arduino/.../espmax.h. Python espmax.py has rounded values (84.0/8.2/128.0)."
+  },
+
+  "joints": [
+    {
+      "id": 1, "name": "base_yaw", "axis": "z", "type": "bus_servo",
+      "servo_model": "Hiwonder HTS-35H", "servo_bus_id": 1,
+      "pulse_min": 0, "pulse_max": 1000, "pulse_home": 500,
+      "degrees_min": 0, "degrees_max": 240, "degrees_per_pulse": 0.24,
+      "_note": "No firmware clamp; physical limit imposed by wiring loom — sweep on delivery"
+    },
+    {
+      "id": 2, "name": "shoulder", "axis": "y", "type": "bus_servo",
+      "servo_model": "Hiwonder HTS-35H", "servo_bus_id": 2,
+      "pulse_min": 0, "pulse_max": 700, "pulse_home": 500,
+      "degrees_min": 0, "degrees_max": 168, "degrees_per_pulse": 0.24,
+      "_clamp": "firmware clamps pulse > 700 -> 700 (espmax.py set_servo_in_range)"
+    },
+    {
+      "id": 3, "name": "elbow", "axis": "y", "type": "bus_servo",
+      "servo_model": "Hiwonder HTS-35H", "servo_bus_id": 3,
+      "pulse_min": 470, "pulse_max": 1000, "pulse_home": 500,
+      "degrees_min": 113, "degrees_max": 240, "degrees_per_pulse": 0.24,
+      "_clamp": "firmware clamps pulse < 470 -> 470 (espmax.py set_servo_in_range)"
+    },
+    {
+      "id": 4, "name": "nozzle_wrist", "axis": "tool_roll", "type": "pwm_servo",
+      "servo_model": "Hiwonder LFD-01M", "pwm_pin": 15,
+      "pulse_us_min": 500, "pulse_us_max": 2500, "pulse_us_home": 1500,
+      "degrees_min": -90, "degrees_max": 90, "pwm_hz": 50
+    }
+  ],
+
+  "end_effector": {
+    "type": "suction",
+    "vacuum_sensor": false,
+    "max_payload_g": 450,
+    "max_payload_lb": 1.0,
+    "vent_release_ms": 1000,
+    "_pump_spec": "Hiwonder air-pump-module, ~6V rail, <420 mA, max vacuum -350 mmHg"
+  },
+
+  "workspace_mm": {
+    "z_max": 225,
+    "xy_min_radius": 50,
+    "_outer_reach_approx": 290,
+    "_singularity": "sqrt(x^2 + y^2) < 50 has no solution (base-column singularity)"
+  },
+
+  "home_pose": {
+    "joints_pulse": [500, 500, 500],
+    "nozzle_pulse_us": 1500,
+    "tip_mm": { "x": 0, "y": -163, "z": 212 },
+    "_derivation": "ORIGIN = (0, -(L1+L3+L4), L0+L2) using rounded Python L's"
+  },
+
+  "power": { "adapter_v": 12, "adapter_a": 5, "adapter_w": 60, "barrel_jack": true },
+
+  "dimensions_mm": { "L": 158, "W": 160, "H": 260, "weight_kg": 1.3 },
+
+  "controller": {
+    "mcu": "ESP32",
+    "firmware_languages": ["MicroPython", "Arduino C++"],
+    "transports": ["usb_serial", "ble", "wifi"],
+    "ble_device_name": "MaxArm",
+    "wifi_default_ip": "192.168.149.1",
+    "_wifi_port": "UNKNOWN — sniff on delivery (try 6000, 8888, 9000)"
+  }
+}
