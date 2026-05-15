@@ -45,12 +45,22 @@ state_path = "/tmp/armsim_state.txt"
 poses_path = "/tmp/armsim_poses.txt"
 html_path  = "/tmp/armsim_index.html"
 
--- ═════ Attestation chain paths ═════
+-- ═════ Attestation chain paths (ephemeral fallback) ═════
+-- /tmp paths are the fallback when ARMSIM_EPHEMERAL=1. Production
+-- paths are resolved via cp_* helpers and default to ~/.ledatic-arm/chain/.
 chain_path      = "/tmp/armsim_chain.jsonl"
 chain_head_path = "/tmp/armsim_chain_head.txt"
 chain_idx_path  = "/tmp/armsim_chain_idx.txt"
 attest_tmp_path = "/tmp/armsim_attest_tmp"
 anchor_path     = "/tmp/armsim_anchors.jsonl"
+
+-- ═════ E-stop / safety ═════
+estop_path = "/tmp/armsim_estop.txt"     -- presence of file = e-stop active
+-- z_floor: literal 5.0 inlined at use-sites (top-const float bug)
+
+-- ═════ Bridge sink paths ═════
+bridge_status_path  = "/tmp/armsim_bridge_status.txt"
+bridge_default_fifo = "/tmp/armsim_bridge.fifo"
 
 -- ═════ Number formatting helpers ═════
 c_to_d c =
@@ -328,6 +338,187 @@ suction_label s =
   else if s == 2 then "venting"
   else "off"
 
+-- ═════ JSON string escape (for user-controlled values) ═════
+json_escape_char c =
+  if c == "\\" then "\\\\"
+  else if c == "\"" then "\\\""
+  else if c == "\n" then "\\n"
+  else if c == "\r" then "\\r"
+  else if c == "\t" then "\\t"
+  else c
+
+json_escape_acc cs acc =
+  if cs == [] then acc
+  else json_escape_acc (tail cs) (join "" [acc, json_escape_char (head cs)])
+
+json_escape s = json_escape_acc (chars s) ""
+
+-- ═════ Persistent chain path resolution ═════
+-- Default: $HOME/.ledatic-arm/chain/   (mkdir -p on first call)
+-- ARMSIM_EPHEMERAL=1 -> /tmp/           (legacy / harness tests)
+resolve_chain_dir _ =
+  let ephemeral = get_env "ARMSIM_EPHEMERAL"
+  if length ephemeral > 0 then "/tmp"
+  else
+    let home = get_env "HOME"
+    if length home == 0 then "/tmp"
+    else
+      let path = join "" [home, "/.ledatic-arm/chain"]
+      let _ = shell (join "" ["mkdir -p ", path])
+      path
+
+cp_chain _      = join "" [resolve_chain_dir 0, "/armsim_chain.jsonl"]
+cp_chain_head _ = join "" [resolve_chain_dir 0, "/armsim_chain_head.txt"]
+cp_chain_idx _  = join "" [resolve_chain_dir 0, "/armsim_chain_idx.txt"]
+cp_anchor _     = join "" [resolve_chain_dir 0, "/armsim_anchors.jsonl"]
+
+-- ═════ Per-PID attest temp path (no race under serve.py threading) ═════
+attest_tmp_for_pid _ =
+  let pid = shell "echo $$ | tr -d '\n'"
+  join "" ["/tmp/armsim_attest_tmp_", pid]
+
+-- ═════ E-stop ═════
+estop_is_active _ =
+  let s = read_file estop_path
+  length s > 0
+
+-- ═════ Bridge config (env-driven) ═════
+bridge_mode_env _ =
+  let m = get_env "ARMSIM_BRIDGE"
+  if length m == 0 then "off" else m
+
+bridge_default_move_ms _ =
+  let v = get_env "ARMSIM_DEFAULT_MOVE_MS"
+  if length v == 0 then 800
+  else parse_int_signed v
+
+bridge_fifo_path_resolved _ =
+  let v = get_env "ARMSIM_BRIDGE_FIFO"
+  if length v == 0 then bridge_default_fifo else v
+
+bridge_tcp_host_resolved _ =
+  let v = get_env "ARMSIM_BRIDGE_HOST"
+  if length v == 0 then "127.0.0.1" else v
+
+bridge_tcp_port_resolved _ =
+  let v = get_env "ARMSIM_BRIDGE_PORT"
+  if length v == 0 then 6000
+  else parse_int_signed v
+
+-- ═════ AA 55 byte frame builders (inline mirror of protocols/lewansoul.rail) ═════
+br_sum_bytes_acc lst acc =
+  if lst == [] then acc
+  else br_sum_bytes_acc (tail lst) (acc + (head lst))
+
+br_sum_bytes lst = br_sum_bytes_acc lst 0
+
+br_chksum func len data_bytes =
+  let s = func + len + (br_sum_bytes data_bytes)
+  (255 - (s % 256)) % 256
+
+br_build_set_angle p1 p2 p3 time_ms =
+  let data = [p1 % 256, p1 / 256,
+              p2 % 256, p2 / 256,
+              p3 % 256, p3 / 256,
+              time_ms % 256, time_ms / 256]
+  let cs = br_chksum 1 8 data
+  let frame = [170, 85, 1, 8]
+  let with_data = append frame data
+  append with_data [cs]
+
+br_build_set_pwmservo us time_ms =
+  let data = [us % 256, us / 256, time_ms % 256, time_ms / 256]
+  let cs = br_chksum 5 4 data
+  let frame = [170, 85, 5, 4]
+  let with_data = append frame data
+  append with_data [cs]
+
+br_build_set_suction cmd_byte =
+  let data = [cmd_byte]
+  let cs = br_chksum 7 1 data
+  let frame = [170, 85, 7, 1]
+  let with_data = append frame data
+  append with_data [cs]
+
+-- list of byte-ints -> hex string with spaces
+br_hex_digit d =
+  if d == 0 then "0" else if d == 1 then "1" else if d == 2 then "2"
+  else if d == 3 then "3" else if d == 4 then "4" else if d == 5 then "5"
+  else if d == 6 then "6" else if d == 7 then "7" else if d == 8 then "8"
+  else if d == 9 then "9" else if d == 10 then "A" else if d == 11 then "B"
+  else if d == 12 then "C" else if d == 13 then "D" else if d == 14 then "E"
+  else "F"
+
+br_byte_to_hex b = join "" [br_hex_digit (b / 16), br_hex_digit (b % 16)]
+
+br_bytes_to_hex_acc lst acc =
+  if lst == [] then acc
+  else
+    let h = br_byte_to_hex (head lst)
+    let nxt = if length acc == 0 then h else join " " [acc, h]
+    br_bytes_to_hex_acc (tail lst) nxt
+
+br_bytes_to_hex lst = br_bytes_to_hex_acc lst ""
+
+-- list of byte-ints -> binary string via char_from_int
+br_bytes_to_str_acc lst acc =
+  if lst == [] then acc
+  else br_bytes_to_str_acc (tail lst) (join "" [acc, char_from_int (head lst)])
+
+br_bytes_to_str lst = br_bytes_to_str_acc lst ""
+
+-- ═════ Bridge send (mode-dispatch) ═════
+bridge_record_status mode frame_hex desc =
+  let t = now_utc 0
+  let status = join "" ["{\"mode\":\"", mode, "\",\"last_frame_t\":\"", t,
+                        "\",\"last_frame_hex\":\"", frame_hex,
+                        "\",\"last_frame_desc\":\"", desc, "\"}"]
+  let _ = write_file bridge_status_path status
+  0
+
+bridge_write_to_sink frame_str frame_hex desc =
+  let mode = bridge_mode_env 0
+  if mode == "off" then 0
+  else if mode == "fifo" then
+    let path = bridge_fifo_path_resolved 0
+    let _ = write_file path frame_str
+    let _ = bridge_record_status mode frame_hex desc
+    1
+  else if mode == "tcp" then
+    let host = bridge_tcp_host_resolved 0
+    let port = bridge_tcp_port_resolved 0
+    -- nc backgrounded so /pose returns immediately (#8 async partial)
+    let cmd = join "" ["( echo '", frame_hex, "' | xxd -r -p | nc -w1 ",
+                       host, " ", show port, " ) >/dev/null 2>&1 &"]
+    let _ = shell cmd
+    let _ = bridge_record_status mode frame_hex desc
+    1
+  else 0
+
+bridge_send_set_angle p1 p2 p3 time_ms =
+  let mode = bridge_mode_env 0
+  if mode == "off" then 0
+  else
+    let frame = br_build_set_angle p1 p2 p3 time_ms
+    let desc = join "" ["SET_ANGLE p1=", show p1, " p2=", show p2, " p3=", show p3, " t=", show time_ms]
+    bridge_write_to_sink (br_bytes_to_str frame) (br_bytes_to_hex frame) desc
+
+bridge_send_set_pwm us time_ms =
+  let mode = bridge_mode_env 0
+  if mode == "off" then 0
+  else
+    let frame = br_build_set_pwmservo us time_ms
+    let desc = join "" ["SET_PWMSERVO us=", show us, " t=", show time_ms]
+    bridge_write_to_sink (br_bytes_to_str frame) (br_bytes_to_hex frame) desc
+
+bridge_send_suction cmd_byte =
+  let mode = bridge_mode_env 0
+  if mode == "off" then 0
+  else
+    let frame = br_build_set_suction cmd_byte
+    let desc = join "" ["SET_SUCTIONNOZZLE cmd=", show cmd_byte]
+    bridge_write_to_sink (br_bytes_to_str frame) (br_bytes_to_hex frame) desc
+
 -- ═════ Attestation chain ═════
 -- Every mutating route appends an entry to /tmp/armsim_chain.jsonl:
 --   {"idx":N,"t":"...","kind":"...","params":"...",
@@ -342,16 +533,19 @@ suction_label s =
 -- carry literal control characters.
 now_utc _ = shell "date -u +%FT%TZ | tr -d '\n'"
 
+-- Per-PID temp path avoids the race when serve.py runs concurrent
+-- handler subprocesses (each subprocess has its own $$).
 sha256_of data =
-  let _ = write_file attest_tmp_path data
-  shell (join "" ["shasum -a 256 ", attest_tmp_path, " | cut -d\" \" -f1 | tr -d '\n'"])
+  let tmp = attest_tmp_for_pid 0
+  let _ = write_file tmp data
+  shell (join "" ["shasum -a 256 ", tmp, " | cut -d\" \" -f1 | tr -d '\n'"])
 
 chain_current_head _ =
-  let h = read_file chain_head_path
+  let h = read_file (cp_chain_head 0)
   if length h == 0 then "genesis" else h
 
 chain_current_idx _ =
-  let s = read_file chain_idx_path
+  let s = read_file (cp_chain_idx 0)
   if length s == 0 then 0 else parse_int_signed s
 
 -- Hash the action data directly (not the full state_json) so the chain
@@ -364,19 +558,22 @@ attest_action kind params p1 p2 p3 p4 su =
   let next_idx = (chain_current_idx 0) + 1
   let t = now_utc 0
   let state_canon = join "," [show p1, show p2, show p3, show p4, show su]
+  -- params is JSON-escaped because it may contain user-controlled bytes
+  -- (e.g. /poses/load?name=<anything>). Canonical hashes the raw value.
   let canonical = join "|" [prev, t, kind, params, state_canon]
   let new_sha = sha256_of canonical
   let entry = join "" ["{\"idx\":", show next_idx,
                        ",\"t\":\"", t,
                        "\",\"kind\":\"", kind,
-                       "\",\"params\":\"", params,
+                       "\",\"params\":\"", json_escape params,
                        "\",\"state\":\"", state_canon,
                        "\",\"prev_sha\":\"", prev,
                        "\",\"sha\":\"", new_sha, "\"}\n"]
-  let existing = read_file chain_path
-  let _ = write_file chain_path (join "" [existing, entry])
-  let _ = write_file chain_head_path new_sha
-  let _ = write_file chain_idx_path (show next_idx)
+  let chp = cp_chain 0
+  let existing = read_file chp
+  let _ = write_file chp (join "" [existing, entry])
+  let _ = write_file (cp_chain_head 0) new_sha
+  let _ = write_file (cp_chain_idx 0) (show next_idx)
   new_sha
 
 filter_nonempty lst =
@@ -385,6 +582,25 @@ filter_nonempty lst =
     let h = head lst
     if length h == 0 then filter_nonempty (tail lst)
     else cons h (filter_nonempty (tail lst))
+
+-- Tip z extraction for floor check (avoids re-running FK in each caller)
+fk_tip_z p1 p2 p3 =
+  let (sh_x, sh_y, sh_z, el_x, el_y, el_z, wr_x, wr_y, wr_z, tl_x, tl_y, tl_z) = fk_full p1 p2 p3
+  tl_z
+
+-- Common rejection bodies
+estop_response _ =
+  let body = "{\"ok\":false,\"reason\":\"estop active - POST /clear to release\"}"
+  http_response 423 "Locked" "application/json" body
+
+z_floor_response z_got =
+  let body = join "" ["{\"ok\":false,\"reason\":\"tip z below 5mm floor\",\"tip_z\":", sf z_got, "}"]
+  http_response 422 "Unprocessable Entity" "application/json" body
+
+parse_time_ms_or_default q =
+  let s = qp_search_str (str_split "&" q) "time_ms"
+  if length s == 0 then bridge_default_move_ms 0
+  else parse_int_signed s
 
 -- ═════ JSON building ═════
 sf x = show_float x
@@ -398,6 +614,8 @@ state_json p1 p2 p3 p4 su reach =
   let s_lbl = suction_label su
   let c_head = chain_current_head 0
   let c_idx = chain_current_idx 0
+  let estop = if estop_is_active 0 then 1 else 0
+  let bmode = bridge_mode_env 0
   join "" [
     "{",
     "\"arm\":\"maxarm\",",
@@ -414,8 +632,10 @@ state_json p1 p2 p3 p4 su reach =
     "\"nozzle_deg\":", sf d4, ",",
     "\"suction\":\"", s_lbl, "\",",
     "\"links_mm\":[84.4,8.14,128.4,138.0,16.8],",
-    "\"limits\":{\"z_max\":225,\"xy_min_radius\":50},",
+    "\"limits\":{\"z_max\":225,\"xy_min_radius\":50,\"z_floor\":5},",
     "\"reachable\":", show reach, ",",
+    "\"estop\":", show estop, ",",
+    "\"bridge\":\"", bmode, "\",",
     "\"chain\":{\"head\":\"", c_head, "\",\"idx\":", show c_idx, "}",
     "}"]
 
@@ -438,88 +658,120 @@ http_response status st ct body =
 route_state _ =
   http_response 200 "OK" "application/json" (state_json_current 0)
 
--- /pose?p1=&p2=&p3=&p4_us=
+-- /pose?p1=&p2=&p3=&p4_us=&time_ms=
 route_pose q =
-  let (cp1, cp2, cp3, cp4, csu) = load_state 0
-  let raw_p1 = qp_get q "p1"
-  let raw_p2 = qp_get q "p2"
-  let raw_p3 = qp_get q "p3"
-  let raw_p4 = qp_get q "p4_us"
-  let q_pairs = str_split "&" q
-  let s_p1 = qp_search_str q_pairs "p1"
-  let s_p2 = qp_search_str q_pairs "p2"
-  let s_p3 = qp_search_str q_pairs "p3"
-  let s_p4 = qp_search_str q_pairs "p4_us"
-  let np1 = if length s_p1 == 0 then cp1 else clamp_int j1_p_lo j1_p_hi raw_p1
-  let np2 = if length s_p2 == 0 then cp2 else clamp_int j2_p_lo j2_p_hi raw_p2
-  let np3 = if length s_p3 == 0 then cp3 else clamp_int j3_p_lo j3_p_hi raw_p3
-  let np4 = if length s_p4 == 0 then cp4 else clamp_int j4_us_lo j4_us_hi raw_p4
-  let _ = save_state np1 np2 np3 np4 csu
-  let _ = attest_action "pose" q np1 np2 np3 np4 csu
-  let body = state_json np1 np2 np3 np4 csu 1
-  http_response 200 "OK" "application/json" body
-
--- /reach?x=&y=&z= (mm)
-route_reach q =
-  let (cp1, cp2, cp3, cp4, csu) = load_state 0
-  let x = to_float (qp_get q "x")
-  let y = to_float (qp_get q "y")
-  let z_raw = to_float (qp_get q "z")
-  let z_clamped = if z_raw > 225.0 then 225.0 else z_raw
-  let xsq = pow x 2.0
-  let ysq = pow y 2.0
-  let r_xy = sqrt (xsq + ysq)
-  if r_xy < 50.0 then
-    let _ = attest_action "reach_unreachable" q cp1 cp2 cp3 cp4 csu
-    http_response 200 "OK" "application/json" (state_json cp1 cp2 cp3 cp4 csu 0)
+  if estop_is_active 0 then estop_response 0
   else
-    let (a1, a2, a3, ok) = ik_solve x y z_clamped
-    if ok == 0 then
-      let _ = attest_action "reach_unreachable" q cp1 cp2 cp3 cp4 csu
-      http_response 200 "OK" "application/json" (state_json cp1 cp2 cp3 cp4 csu 0)
+    let (cp1, cp2, cp3, cp4, csu) = load_state 0
+    let raw_p1 = qp_get q "p1"
+    let raw_p2 = qp_get q "p2"
+    let raw_p3 = qp_get q "p3"
+    let raw_p4 = qp_get q "p4_us"
+    let q_pairs = str_split "&" q
+    let s_p1 = qp_search_str q_pairs "p1"
+    let s_p2 = qp_search_str q_pairs "p2"
+    let s_p3 = qp_search_str q_pairs "p3"
+    let s_p4 = qp_search_str q_pairs "p4_us"
+    let np1 = if length s_p1 == 0 then cp1 else clamp_int j1_p_lo j1_p_hi raw_p1
+    let np2 = if length s_p2 == 0 then cp2 else clamp_int j2_p_lo j2_p_hi raw_p2
+    let np3 = if length s_p3 == 0 then cp3 else clamp_int j3_p_lo j3_p_hi raw_p3
+    let np4 = if length s_p4 == 0 then cp4 else clamp_int j4_us_lo j4_us_hi raw_p4
+    let tip_z = fk_tip_z np1 np2 np3
+    if tip_z < 5.0 then z_floor_response tip_z
     else
-      let raw_p1 = float_round (deg_to_pulse_j1 a1)
-      let raw_p2 = float_round (deg_to_pulse_j2 a2)
-      let raw_p3 = float_round (deg_to_pulse_j3 a3)
-      let np1 = clamp_int j1_p_lo j1_p_hi raw_p1
-      let np2 = clamp_int j2_p_lo j2_p_hi raw_p2
-      let np3 = clamp_int j3_p_lo j3_p_hi raw_p3
-      let _ = save_state np1 np2 np3 cp4 csu
-      let _ = attest_action "reach" q np1 np2 np3 cp4 csu
-      http_response 200 "OK" "application/json" (state_json np1 np2 np3 cp4 csu 1)
+      let _ = save_state np1 np2 np3 np4 csu
+      let _ = attest_action "pose" q np1 np2 np3 np4 csu
+      let tms = parse_time_ms_or_default q
+      let _ = bridge_send_set_angle np1 np2 np3 tms
+      let _ = bridge_send_set_pwm np4 tms
+      http_response 200 "OK" "application/json" (state_json np1 np2 np3 np4 csu 1)
 
--- /nozzle?deg=
+-- /reach?x=&y=&z=&time_ms= (mm)
+route_reach q =
+  if estop_is_active 0 then estop_response 0
+  else
+    let (cp1, cp2, cp3, cp4, csu) = load_state 0
+    let x = to_float (qp_get q "x")
+    let y = to_float (qp_get q "y")
+    let z_raw = to_float (qp_get q "z")
+    let z_clamped = if z_raw > 225.0 then 225.0 else z_raw
+    if z_raw < 5.0 then z_floor_response z_raw
+    else
+      let xsq = pow x 2.0
+      let ysq = pow y 2.0
+      let r_xy = sqrt (xsq + ysq)
+      if r_xy < 50.0 then
+        let _ = attest_action "reach_unreachable" q cp1 cp2 cp3 cp4 csu
+        http_response 200 "OK" "application/json" (state_json cp1 cp2 cp3 cp4 csu 0)
+      else
+        let (a1, a2, a3, ok) = ik_solve x y z_clamped
+        if ok == 0 then
+          let _ = attest_action "reach_unreachable" q cp1 cp2 cp3 cp4 csu
+          http_response 200 "OK" "application/json" (state_json cp1 cp2 cp3 cp4 csu 0)
+        else
+          let raw_p1 = float_round (deg_to_pulse_j1 a1)
+          let raw_p2 = float_round (deg_to_pulse_j2 a2)
+          let raw_p3 = float_round (deg_to_pulse_j3 a3)
+          let np1 = clamp_int j1_p_lo j1_p_hi raw_p1
+          let np2 = clamp_int j2_p_lo j2_p_hi raw_p2
+          let np3 = clamp_int j3_p_lo j3_p_hi raw_p3
+          let tip_z = fk_tip_z np1 np2 np3
+          if tip_z < 5.0 then z_floor_response tip_z
+          else
+            let _ = save_state np1 np2 np3 cp4 csu
+            let _ = attest_action "reach" q np1 np2 np3 cp4 csu
+            let tms = parse_time_ms_or_default q
+            let _ = bridge_send_set_angle np1 np2 np3 tms
+            http_response 200 "OK" "application/json" (state_json np1 np2 np3 cp4 csu 1)
+
+-- /nozzle?deg=&time_ms=
 route_nozzle q =
-  let (cp1, cp2, cp3, cp4, csu) = load_state 0
-  let deg = qp_get q "deg"
-  let degf = to_float deg
-  let degc = if degf > 90.0 then 90.0
-             else if degf < 0.0 - 90.0 then 0.0 - 90.0
-             else degf
-  let us_f = deg_to_us_nozzle degc
-  let us_i = float_round us_f
-  let np4 = clamp_int j4_us_lo j4_us_hi us_i
-  let _ = save_state cp1 cp2 cp3 np4 csu
-  let _ = attest_action "nozzle" q cp1 cp2 cp3 np4 csu
-  http_response 200 "OK" "application/json" (state_json cp1 cp2 cp3 np4 csu 1)
+  if estop_is_active 0 then estop_response 0
+  else
+    let (cp1, cp2, cp3, cp4, csu) = load_state 0
+    let deg = qp_get q "deg"
+    let degf = to_float deg
+    let degc = if degf > 90.0 then 90.0
+               else if degf < 0.0 - 90.0 then 0.0 - 90.0
+               else degf
+    let us_f = deg_to_us_nozzle degc
+    let us_i = float_round us_f
+    let np4 = clamp_int j4_us_lo j4_us_hi us_i
+    let _ = save_state cp1 cp2 cp3 np4 csu
+    let _ = attest_action "nozzle" q cp1 cp2 cp3 np4 csu
+    let tms = parse_time_ms_or_default q
+    let _ = bridge_send_set_pwm np4 tms
+    http_response 200 "OK" "application/json" (state_json cp1 cp2 cp3 np4 csu 1)
 
 -- /suction?cmd=on|vent|off
 route_suction q =
-  let (cp1, cp2, cp3, cp4, csu) = load_state 0
-  let cmd = qp_get_str q "cmd"
-  let nsu = if cmd == "on" then 1
-            else if cmd == "vent" then 2
-            else if cmd == "off" then 0
-            else csu
-  let _ = save_state cp1 cp2 cp3 cp4 nsu
-  let _ = attest_action "suction" q cp1 cp2 cp3 cp4 nsu
-  http_response 200 "OK" "application/json" (state_json cp1 cp2 cp3 cp4 nsu 1)
+  if estop_is_active 0 then estop_response 0
+  else
+    let (cp1, cp2, cp3, cp4, csu) = load_state 0
+    let cmd = qp_get_str q "cmd"
+    let nsu = if cmd == "on" then 1
+              else if cmd == "vent" then 2
+              else if cmd == "off" then 0
+              else csu
+    let cmd_byte = if nsu == 1 then 1
+                   else if nsu == 2 then 2
+                   else 3
+    let _ = save_state cp1 cp2 cp3 cp4 nsu
+    let _ = attest_action "suction" q cp1 cp2 cp3 cp4 nsu
+    let _ = bridge_send_suction cmd_byte
+    http_response 200 "OK" "application/json" (state_json cp1 cp2 cp3 cp4 nsu 1)
 
--- /home
-route_home _ =
-  let _ = save_state home_p1 home_p2 home_p3 home_p4_us home_suction
-  let _ = attest_action "home" "" home_p1 home_p2 home_p3 home_p4_us home_suction
-  http_response 200 "OK" "application/json" (state_json home_p1 home_p2 home_p3 home_p4_us home_suction 1)
+-- /home?time_ms=
+route_home q =
+  if estop_is_active 0 then estop_response 0
+  else
+    let _ = save_state home_p1 home_p2 home_p3 home_p4_us home_suction
+    let _ = attest_action "home" "" home_p1 home_p2 home_p3 home_p4_us home_suction
+    let tms = parse_time_ms_or_default q
+    let _ = bridge_send_set_angle home_p1 home_p2 home_p3 tms
+    let _ = bridge_send_set_pwm home_p4_us tms
+    let _ = bridge_send_suction 3
+    http_response 200 "OK" "application/json" (state_json home_p1 home_p2 home_p3 home_p4_us home_suction 1)
 
 -- ═════ Named poses ═════
 -- Storage: one line per pose, format `<name> <p1> <p2> <p3> <p4_us> <suction>`.
@@ -539,7 +791,7 @@ pose_items_loop lines =
         let p3s  = head (tail (tail (tail parts)))
         let p4s  = head (tail (tail (tail (tail parts))))
         let sus  = head (tail (tail (tail (tail (tail parts)))))
-        let item = join "" ["{\"name\":\"", nm,
+        let item = join "" ["{\"name\":\"", json_escape nm,
                             "\",\"pulses\":[", p1s, ",", p2s, ",", p3s, ",", p4s,
                             "],\"suction\":\"", suction_label (parse_int_signed sus),
                             "\"}"]
@@ -587,21 +839,29 @@ route_poses_save q =
     route_poses 0
 
 route_poses_load q =
-  let name = qp_get_str q "name"
-  let lines = str_split "\n" (read_file poses_path)
-  let line = poses_find lines name
-  if length line == 0 then
-    http_response 404 "Not Found" "text/plain" "pose not found"
+  if estop_is_active 0 then estop_response 0
   else
-    let parts = str_split " " line
-    let p1 = clamp_int j1_p_lo j1_p_hi (parse_int_signed (head (tail parts)))
-    let p2 = clamp_int j2_p_lo j2_p_hi (parse_int_signed (head (tail (tail parts))))
-    let p3 = clamp_int j3_p_lo j3_p_hi (parse_int_signed (head (tail (tail (tail parts)))))
-    let p4 = clamp_int j4_us_lo j4_us_hi (parse_int_signed (head (tail (tail (tail (tail parts))))))
-    let su = parse_int_signed (head (tail (tail (tail (tail (tail parts))))))
-    let _ = save_state p1 p2 p3 p4 su
-    let _ = attest_action "poses_load" q p1 p2 p3 p4 su
-    http_response 200 "OK" "application/json" (state_json p1 p2 p3 p4 su 1)
+    let name = qp_get_str q "name"
+    let lines = str_split "\n" (read_file poses_path)
+    let line = poses_find lines name
+    if length line == 0 then
+      http_response 404 "Not Found" "text/plain" "pose not found"
+    else
+      let parts = str_split " " line
+      let p1 = clamp_int j1_p_lo j1_p_hi (parse_int_signed (head (tail parts)))
+      let p2 = clamp_int j2_p_lo j2_p_hi (parse_int_signed (head (tail (tail parts))))
+      let p3 = clamp_int j3_p_lo j3_p_hi (parse_int_signed (head (tail (tail (tail parts)))))
+      let p4 = clamp_int j4_us_lo j4_us_hi (parse_int_signed (head (tail (tail (tail (tail parts))))))
+      let su = parse_int_signed (head (tail (tail (tail (tail (tail parts))))))
+      let tip_z = fk_tip_z p1 p2 p3
+      if tip_z < 5.0 then z_floor_response tip_z
+      else
+        let _ = save_state p1 p2 p3 p4 su
+        let _ = attest_action "poses_load" q p1 p2 p3 p4 su
+        let tms = parse_time_ms_or_default q
+        let _ = bridge_send_set_angle p1 p2 p3 tms
+        let _ = bridge_send_set_pwm p4 tms
+        http_response 200 "OK" "application/json" (state_json p1 p2 p3 p4 su 1)
 
 route_poses_delete q =
   let name = qp_get_str q "name"
@@ -616,7 +876,7 @@ route_poses_delete q =
 
 -- /chain  -- returns the JSONL chain wrapped as a JSON array
 route_chain _ =
-  let content = read_file chain_path
+  let content = read_file (cp_chain 0)
   let lines = str_split "\n" content
   let entries = filter_nonempty lines
   let body = join "" ["[", join "," entries, "]"]
@@ -645,8 +905,9 @@ run_anchor_attest head_sha =
 anchor_success_body head_sha head_idx attest_json =
   let t = now_utc 0
   let anchor_entry = join "" ["{\"t\":\"", t, "\",\"head_idx\":", show head_idx, ",\"head_sha\":\"", head_sha, "\",\"attestation\":", attest_json, "}\n"]
-  let existing = read_file anchor_path
-  let _ = write_file anchor_path (join "" [existing, anchor_entry])
+  let ap = cp_anchor 0
+  let existing = read_file ap
+  let _ = write_file ap (join "" [existing, anchor_entry])
   join "" ["{\"ok\":true,\"head_sha\":\"", head_sha, "\",\"head_idx\":", show head_idx, ",\"attestation\":", attest_json, "}"]
 
 anchor_fail_body head_sha head_idx =
@@ -669,10 +930,46 @@ route_anchor _ =
 
 -- /anchors  -- list of historical anchors
 route_anchors _ =
-  let content = read_file anchor_path
+  let content = read_file (cp_anchor 0)
   let lines = str_split "\n" content
   let entries = filter_nonempty lines
   let body = join "" ["[", join "," entries, "]"]
+  http_response 200 "OK" "application/json" body
+
+-- /estop -- arm e-stop. Drops suction, locks mutating routes.
+route_estop _ =
+  let (cp1, cp2, cp3, cp4, csu) = load_state 0
+  let _ = save_state cp1 cp2 cp3 cp4 0   -- drop suction
+  let _ = write_file estop_path "1"
+  let _ = attest_action "estop" "" cp1 cp2 cp3 cp4 0
+  -- Tell the real arm too (if bridged): vent_close to release any held object.
+  let _ = bridge_send_suction 3
+  http_response 200 "OK" "application/json"
+    (state_json cp1 cp2 cp3 cp4 0 1)
+
+-- /clear -- release e-stop.
+route_clear _ =
+  let _ = shell (join "" ["rm -f ", estop_path])
+  let (cp1, cp2, cp3, cp4, csu) = load_state 0
+  let _ = attest_action "clear" "" cp1 cp2 cp3 cp4 csu
+  http_response 200 "OK" "application/json"
+    (state_json cp1 cp2 cp3 cp4 csu 1)
+
+-- /actual -- stub. In sim mode this is identical to /state. When the
+-- real-arm bridge is wired and READ_ANGLE round-trip is working, it
+-- will return the arm's actual readback position instead.
+route_actual _ =
+  let (cp1, cp2, cp3, cp4, csu) = load_state 0
+  http_response 200 "OK" "application/json"
+    (state_json cp1 cp2 cp3 cp4 csu 1)
+
+-- /bridge_status -- last byte frame the bridge sent (if any) + mode
+route_bridge_status _ =
+  let s = read_file bridge_status_path
+  let bmode = bridge_mode_env 0
+  let body = if length s == 0 then
+               join "" ["{\"mode\":\"", bmode, "\",\"last_frame_t\":null,\"last_frame_hex\":\"\",\"last_frame_desc\":\"\"}"]
+             else s
   http_response 200 "OK" "application/json" body
 
 -- ═════ Index ═════
@@ -699,7 +996,7 @@ main =
     else if plain == "/reach" then route_reach query
     else if plain == "/nozzle" then route_nozzle query
     else if plain == "/suction" then route_suction query
-    else if plain == "/home" then route_home 0
+    else if plain == "/home" then route_home query
     else if plain == "/poses" then route_poses 0
     else if plain == "/poses/save" then route_poses_save query
     else if plain == "/poses/load" then route_poses_load query
@@ -707,6 +1004,10 @@ main =
     else if plain == "/chain" then route_chain 0
     else if plain == "/anchor" then route_anchor 0
     else if plain == "/anchors" then route_anchors 0
+    else if plain == "/estop" then route_estop 0
+    else if plain == "/clear" then route_clear 0
+    else if plain == "/actual" then route_actual 0
+    else if plain == "/bridge_status" then route_bridge_status 0
     else route_404 plain
   let _ = write_file "/dev/stdout" resp
   0

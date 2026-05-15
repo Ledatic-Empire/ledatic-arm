@@ -776,6 +776,267 @@ input[type=range].slider:focus::-webkit-slider-thumb { background: var(--accent)
   text-transform: uppercase;
 }
 .boot-inner .blink { animation: blink 1s steps(2,end) infinite; }
+
+/* ============================================================
+   CHAIN PANEL — attestation
+   ============================================================ */
+.chain-collapsed {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  color: var(--dim);
+}
+.chain-collapsed .head-hex {
+  color: var(--ink);
+  letter-spacing: 0.02em;
+}
+.chain-collapsed .head-hex.genesis { color: var(--mute); font-style: italic; }
+.chain-collapsed .sep { color: var(--axis); margin: 0 6px; }
+.chain-collapsed .idx { color: var(--accent); }
+.chain-collapsed .expand-btn {
+  background: transparent;
+  border: 0;
+  color: var(--mute);
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  cursor: pointer;
+  padding: 2px 4px;
+  transition: color 0.15s;
+}
+.chain-collapsed .expand-btn:hover { color: var(--accent); }
+.chain-collapsed .expand-btn::before { content: "[ "; color: var(--axis); }
+.chain-collapsed .expand-btn::after  { content: " ]"; color: var(--axis); }
+
+.chain-expanded { margin-top: 4px; }
+.chain-expanded.hidden { display: none; }
+
+.chain-head-full {
+  background: var(--pane2);
+  border-left: 2px solid var(--accent-dim);
+  padding: 8px 10px;
+  font-size: 10px;
+  color: var(--ink);
+  letter-spacing: 0.02em;
+  word-break: break-all;
+  user-select: text;
+  margin-bottom: 10px;
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+}
+.chain-head-full .head-sha {
+  flex: 1;
+  font-variant-numeric: tabular-nums;
+}
+.chain-head-full .head-sha.genesis { color: var(--mute); font-style: italic; }
+.chain-head-full .head-meta {
+  display: block;
+  font-size: 9px;
+  color: var(--dim);
+  letter-spacing: 0.15em;
+  text-transform: uppercase;
+  margin-bottom: 4px;
+}
+.chain-copy-btn {
+  background: transparent;
+  border: 1px solid var(--grid);
+  color: var(--mute);
+  font-family: var(--mono);
+  font-size: 9px;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  padding: 4px 8px;
+  border-radius: var(--radius);
+  cursor: pointer;
+  white-space: nowrap;
+  flex-shrink: 0;
+  transition: color 0.15s, border-color 0.15s;
+}
+.chain-copy-btn:hover { color: var(--accent); border-color: var(--accent-dim); }
+.chain-copy-btn.copied { color: var(--accent); border-color: var(--accent); }
+
+.chain-list-wrap {
+  max-height: 260px;
+  overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: var(--grid) var(--pane);
+  background: var(--pane2);
+  border-left: 2px solid var(--grid);
+  margin-bottom: 10px;
+}
+.chain-list-wrap::-webkit-scrollbar { width: 4px; }
+.chain-list-wrap::-webkit-scrollbar-thumb { background: var(--grid); }
+
+.chain-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.02em;
+}
+.chain-table tr { border-bottom: 1px dashed var(--grid); }
+.chain-table tr:last-child { border-bottom: 0; }
+.chain-table tr:hover { background: var(--accent-faint); }
+.chain-table td {
+  padding: 4px 6px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.chain-table td.c-idx    { color: var(--accent); width: 38px; }
+.chain-table td.c-time   { color: var(--mute);   width: 60px; }
+.chain-table td.c-kind   { color: var(--ink);    width: 78px; }
+.chain-table td.c-params { color: var(--dim);    max-width: 0; }
+.chain-table td.c-sha    { color: var(--mute);   width: 72px; text-align: right; }
+.chain-empty {
+  padding: 14px 8px;
+  font-size: 10px;
+  color: var(--dim);
+  letter-spacing: 0.15em;
+  text-transform: uppercase;
+  text-align: center;
+}
+.chain-empty::before { content: "( "; color: var(--accent); }
+.chain-empty::after  { content: " )"; color: var(--accent); }
+
+.chain-show-all {
+  display: block;
+  width: 100%;
+  background: transparent;
+  border: 0;
+  border-top: 1px dashed var(--grid);
+  color: var(--mute);
+  font-family: var(--mono);
+  font-size: 9px;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  padding: 6px 0;
+  cursor: pointer;
+  transition: color 0.15s;
+}
+.chain-show-all:hover { color: var(--accent); }
+.chain-show-all::before { content: "[ "; color: var(--axis); }
+.chain-show-all::after  { content: " ]"; color: var(--axis); }
+
+.chain-actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+.btn-anchor {
+  flex: 1;
+  background: transparent;
+  border: 1px solid var(--accent-dim);
+  color: var(--accent);
+  font-family: var(--mono);
+  font-size: 11px;
+  letter-spacing: 0.25em;
+  text-transform: uppercase;
+  padding: 10px 12px;
+  border-radius: var(--radius);
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s, border-color 0.15s;
+  position: relative;
+}
+.btn-anchor::before { content: "[ "; opacity: 0.7; }
+.btn-anchor::after  { content: " ]"; opacity: 0.7; }
+.btn-anchor:hover { background: var(--accent-dim); }
+.btn-anchor:active { transform: scale(0.98); }
+.btn-anchor:disabled { cursor: wait; opacity: 0.85; }
+.btn-anchor.anchoring {
+  color: var(--mute);
+  border-color: var(--grid);
+}
+.btn-anchor.anchoring::before { content: "."; animation: anchor-dot 1.2s steps(4, end) infinite; }
+.btn-anchor.anchoring::after { content: ""; }
+@keyframes anchor-dot {
+  0%   { content: "·  "; }
+  25%  { content: "·· "; }
+  50%  { content: "···"; }
+  75%  { content: " ··"; }
+  100% { content: "  ·"; }
+}
+
+.anchor-status {
+  margin-top: 10px;
+  font-size: 10px;
+  color: var(--dim);
+  letter-spacing: 0.05em;
+  padding: 6px 8px;
+  background: var(--pane2);
+  border-left: 2px solid var(--grid);
+  min-height: 22px;
+  font-variant-numeric: tabular-nums;
+  transition: border-color 0.2s, color 0.2s;
+  display: none;
+}
+.anchor-status.show { display: block; }
+.anchor-status.ok   { border-left-color: var(--accent); color: var(--ink); }
+.anchor-status.dim  { border-left-color: var(--mute); color: var(--mute); }
+.anchor-status.bad  { border-left-color: var(--alert); color: var(--alert); }
+.anchor-status .lbl { color: var(--mute); margin-right: 6px; text-transform: uppercase; letter-spacing: 0.15em; font-size: 9px; }
+.anchor-status .v   { color: var(--ink); }
+.anchor-status .v.dim { color: var(--mute); }
+.anchor-status .attest-toggle {
+  background: transparent; border: 0; color: var(--mute);
+  font-family: var(--mono); font-size: 9px; letter-spacing: 0.18em;
+  text-transform: uppercase; cursor: pointer; margin-left: 8px;
+  padding: 0;
+}
+.anchor-status .attest-toggle:hover { color: var(--accent); }
+.anchor-status .attest-toggle::before { content: "[ "; color: var(--axis); }
+.anchor-status .attest-toggle::after  { content: " ]"; color: var(--axis); }
+.anchor-status pre.attest-block {
+  display: none;
+  margin-top: 6px;
+  padding: 6px 8px;
+  background: var(--bg);
+  border-left: 1px dashed var(--grid);
+  font-size: 9px;
+  line-height: 1.4;
+  color: var(--mute);
+  letter-spacing: 0;
+  white-space: pre-wrap;
+  word-break: break-all;
+  max-height: 180px;
+  overflow-y: auto;
+}
+.anchor-status pre.attest-block.show { display: block; }
+
+/* Tooltip for chain row */
+.chain-tip {
+  position: fixed;
+  pointer-events: none;
+  background: var(--bg);
+  border: 1px solid var(--accent-dim);
+  padding: 8px 10px;
+  font-size: 9px;
+  font-family: var(--mono);
+  color: var(--ink);
+  letter-spacing: 0;
+  max-width: 540px;
+  word-break: break-all;
+  z-index: 200;
+  display: none;
+  box-shadow: 0 0 18px rgba(0,0,0,0.6);
+}
+.chain-tip.show { display: block; }
+.chain-tip .lbl {
+  display: block;
+  color: var(--dim);
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  font-size: 8px;
+  margin-bottom: 2px;
+}
+.chain-tip .lbl + div { margin-bottom: 6px; }
+.chain-tip .canon { color: var(--mute); }
+.chain-tip .full-sha { color: var(--accent); }
 </style>
 </head>
 <body>
@@ -819,6 +1080,7 @@ input[type=range].slider:focus::-webkit-slider-thumb { background: var(--accent)
         <button class="viewer-btn" data-toggle="grid" id="t-grid">grid</button>
         <button class="viewer-btn" data-toggle="bounds" id="t-bounds">bounds</button>
         <button class="viewer-btn" data-toggle="trail" id="t-trail">trail</button>
+        <button class="viewer-btn" data-toggle="ghost" id="t-ghost">ghost</button>
         <button class="viewer-btn" id="t-reset">reset</button>
       </div>
 
@@ -914,6 +1176,45 @@ input[type=range].slider:focus::-webkit-slider-thumb { background: var(--accent)
         </div>
       </section>
 
+      <!-- CHAIN -->
+      <section class="section">
+        <div class="section-head">
+          <div class="section-title">attestation chain</div>
+          <div class="section-meta">sha-256 · prev-hashed</div>
+        </div>
+
+        <div class="chain-collapsed" id="chain-collapsed">
+          <span>
+            <span style="color:var(--mute)">head </span><span class="head-hex" id="chain-head-short">--</span>
+            <span class="sep">·</span>
+            <span style="color:var(--mute)">idx </span><span class="idx" id="chain-idx-short">--</span>
+          </span>
+          <button class="expand-btn" id="chain-expand-btn">expand</button>
+        </div>
+
+        <div class="chain-expanded hidden" id="chain-expanded">
+          <div class="chain-head-full">
+            <div>
+              <span class="head-meta">current head</span>
+              <span class="head-sha" id="chain-head-full">--</span>
+            </div>
+            <button class="chain-copy-btn" id="chain-copy-btn" title="copy head sha">copy</button>
+          </div>
+
+          <div class="chain-list-wrap" id="chain-list-wrap">
+            <table class="chain-table" id="chain-table">
+              <tbody id="chain-tbody"></tbody>
+            </table>
+          </div>
+
+          <div class="chain-actions">
+            <button class="btn-anchor" id="btn-anchor">anchor to beacon</button>
+          </div>
+
+          <div class="anchor-status" id="anchor-status"></div>
+        </div>
+      </section>
+
     </aside>
   </main>
 
@@ -931,6 +1232,9 @@ input[type=range].slider:focus::-webkit-slider-thumb { background: var(--accent)
 
 </div>
 
+<!-- chain row tooltip (singleton, positioned by JS) -->
+<div class="chain-tip" id="chain-tip"></div>
+
 <script>
 /* ============================================================
    maxarm.console — runtime
@@ -938,6 +1242,9 @@ input[type=range].slider:focus::-webkit-slider-thumb { background: var(--accent)
 
 // ---------- config ----------
 const POLL_MS    = 200;
+const ACTUAL_POLL_MS = 500;
+const CHAIN_RENDER_MAX = 15;
+const GHOST_THRESHOLD_MM = 2.0;
 const TRAIL_MAX  = 30;
 const SCENE_BG   = "#0a0e0f";
 const COL_GRID   = "#172123";
@@ -974,6 +1281,20 @@ let footerFlashTimer = null;
 let showGrid = true;
 let showBounds = true;
 let showTrail = true;
+let showGhost = true;
+
+// Chain
+let chainEntries = [];          // full /chain array
+let chainLastSeenIdx = -1;      // last idx we've actually rendered for
+let chainPanelOpen = false;
+let chainShowingAll = false;
+let chainTipEl = null;          // resolved lazily
+let anchorBusy = false;
+let lastAnchorResult = null;
+
+// Actual-arm readback (for ghost)
+let actualState = null;         // latest /actual response
+let actualDiffers = false;      // true when commanded vs actual >2mm at any joint
 
 // Camera (orbit)
 const cam = {
@@ -1200,6 +1521,9 @@ function drawScene(basis) {
   if (showBounds) {
     drawBounds(basis);
   }
+
+  // 4a. ghost arm (actual readback) — drawn first so the commanded arm overlays it
+  drawGhostArm(basis);
 
   // 4. arm itself
   if (state && state.fk) {
@@ -1500,6 +1824,7 @@ function bindToggle(id, getter, setter) {
 bindToggle("t-grid",   () => showGrid,   v => showGrid = v);
 bindToggle("t-bounds", () => showBounds, v => showBounds = v);
 bindToggle("t-trail",  () => showTrail,  v => showTrail = v);
+bindToggle("t-ghost",  () => showGhost,  v => showGhost = v);
 
 // ---------- API ----------
 async function api(path, params) {
@@ -1581,6 +1906,15 @@ function applyState(s) {
     $("#hud-tip").textContent = fmtV3(t);
   }
   $("#hud-nozzle").textContent = (s.nozzle_deg != null) ? s.nozzle_deg.toFixed(1) : "--";
+
+  // chain head — collapsed line always updates; full list only on idx advance
+  if (s.chain) {
+    updateChainHead(s.chain);
+    if (s.chain.idx !== chainLastSeenIdx) {
+      chainLastSeenIdx = s.chain.idx;
+      fetchChainEntries();
+    }
+  }
 
   // footer
   updateFooter(s);
@@ -1857,6 +2191,328 @@ document.addEventListener("keydown", async e => {
   }
 });
 
+// ---------- chain (attestation) ----------
+function shortHex(h) {
+  if (!h) return "--";
+  if (h === "genesis") return "genesis";
+  return h.slice(0, 8);
+}
+
+function updateChainHead(chain) {
+  const headEl = $("#chain-head-short");
+  const idxEl  = $("#chain-idx-short");
+  const fullEl = $("#chain-head-full");
+  if (!chain || chain.head == null) {
+    headEl.textContent = "--";
+    idxEl.textContent  = "--";
+    fullEl.textContent = "--";
+    return;
+  }
+  const isGen = chain.head === "genesis";
+  headEl.textContent = shortHex(chain.head) + (isGen ? "" : "..");
+  headEl.classList.toggle("genesis", isGen);
+  idxEl.textContent = chain.idx != null ? String(chain.idx) : "--";
+  fullEl.textContent = isGen ? "genesis (chain empty)" : chain.head;
+  fullEl.classList.toggle("genesis", isGen);
+}
+
+async function fetchChainEntries() {
+  try {
+    const res = await fetch("/chain", { cache: "no-store" });
+    if (!res.ok) throw new Error("HTTP " + res.status);
+    const arr = await res.json();
+    chainEntries = Array.isArray(arr) ? arr : [];
+    renderChainTable();
+  } catch (e) {
+    /* silent — chain panel just won't update this tick */
+  }
+}
+
+function fmtChainTime(iso) {
+  if (!iso) return "--";
+  // expects "2026-05-15T18:29:18Z" — pull HH:MM:SS
+  const m = iso.match(/T(\d{2}:\d{2}:\d{2})/);
+  return m ? m[1] : iso.slice(0, 8);
+}
+
+function truncateMid(s, max) {
+  if (!s) return "";
+  if (s.length <= max) return s;
+  return s.slice(0, max - 1) + "…";
+}
+
+function htmlEsc(s) {
+  return String(s).replace(/[<>&"]/g, c => ({ "<":"&lt;",">":"&gt;","&":"&amp;","\"":"&quot;" }[c]));
+}
+
+function renderChainTable() {
+  const tbody = $("#chain-tbody");
+  const wrap  = $("#chain-list-wrap");
+  if (!tbody || !wrap) return;
+  const total = chainEntries.length;
+  // strip any prior "show all" footer from wrap (we re-add as needed)
+  const oldFooter = wrap.querySelector(".chain-show-all");
+  if (oldFooter) oldFooter.remove();
+
+  if (total === 0) {
+    tbody.innerHTML = `<tr><td colspan="5" class="chain-empty">chain empty</td></tr>`;
+    return;
+  }
+
+  // most-recent N
+  const renderCount = chainShowingAll ? total : Math.min(CHAIN_RENDER_MAX, total);
+  const slice = chainEntries.slice(-renderCount).slice().reverse(); // newest first
+  const rows = [];
+  for (const e of slice) {
+    const idx   = e.idx != null ? "#" + String(e.idx).padStart(3, "0") : "--";
+    const time  = fmtChainTime(e.t);
+    const kind  = htmlEsc(e.kind || "--");
+    const pTrunc = truncateMid(e.params || "", 30);
+    const shaShort = (e.sha || "").slice(0, 8) + "..";
+    const canonical = `${e.prev_sha || ""}|${e.t || ""}|${e.kind || ""}|${e.params || ""}|${e.state || ""}`;
+    rows.push(
+      `<tr data-sha="${htmlEsc(e.sha || "")}" data-canon="${htmlEsc(canonical)}">` +
+      `<td class="c-idx">${htmlEsc(idx)}</td>` +
+      `<td class="c-time">${htmlEsc(time)}</td>` +
+      `<td class="c-kind">${kind}</td>` +
+      `<td class="c-params">${htmlEsc(pTrunc)}</td>` +
+      `<td class="c-sha">${htmlEsc(shaShort)}</td>` +
+      `</tr>`
+    );
+  }
+  tbody.innerHTML = rows.join("");
+
+  // attach hover handlers on rows
+  tbody.querySelectorAll("tr[data-sha]").forEach(tr => {
+    tr.addEventListener("mouseenter", onChainRowEnter);
+    tr.addEventListener("mousemove",  onChainRowMove);
+    tr.addEventListener("mouseleave", onChainRowLeave);
+  });
+
+  // optional "show all" footer
+  if (!chainShowingAll && total > CHAIN_RENDER_MAX) {
+    const btn = document.createElement("button");
+    btn.className = "chain-show-all";
+    btn.textContent = `show all (${total})`;
+    btn.addEventListener("click", () => {
+      chainShowingAll = true;
+      renderChainTable();
+    });
+    wrap.appendChild(btn);
+  } else if (chainShowingAll && total > CHAIN_RENDER_MAX) {
+    const btn = document.createElement("button");
+    btn.className = "chain-show-all";
+    btn.textContent = `collapse to last ${CHAIN_RENDER_MAX}`;
+    btn.addEventListener("click", () => {
+      chainShowingAll = false;
+      renderChainTable();
+    });
+    wrap.appendChild(btn);
+  }
+}
+
+function onChainRowEnter(e) {
+  const tr = e.currentTarget;
+  const full = tr.dataset.sha || "";
+  const canon = tr.dataset.canon || "";
+  if (!chainTipEl) chainTipEl = $("#chain-tip");
+  chainTipEl.innerHTML =
+    `<span class="lbl">sha-256</span><div class="full-sha">${htmlEsc(full)}</div>` +
+    `<span class="lbl">canonical · prev|t|kind|params|state</span><div class="canon">${htmlEsc(canon)}</div>`;
+  chainTipEl.classList.add("show");
+  positionChainTip(e);
+}
+function onChainRowMove(e) {
+  if (chainTipEl && chainTipEl.classList.contains("show")) positionChainTip(e);
+}
+function onChainRowLeave() {
+  if (chainTipEl) chainTipEl.classList.remove("show");
+}
+function positionChainTip(e) {
+  if (!chainTipEl) return;
+  // place tooltip near cursor, keeping it on-screen
+  const pad = 14;
+  const tipRect = chainTipEl.getBoundingClientRect();
+  let x = e.clientX + 12;
+  let y = e.clientY + 12;
+  if (x + tipRect.width + pad > window.innerWidth) x = e.clientX - tipRect.width - 12;
+  if (y + tipRect.height + pad > window.innerHeight) y = e.clientY - tipRect.height - 12;
+  if (x < pad) x = pad;
+  if (y < pad) y = pad;
+  chainTipEl.style.left = x + "px";
+  chainTipEl.style.top  = y + "px";
+}
+
+// expand / collapse
+$("#chain-expand-btn").addEventListener("click", () => {
+  chainPanelOpen = !chainPanelOpen;
+  const exp = $("#chain-expanded");
+  exp.classList.toggle("hidden", !chainPanelOpen);
+  $("#chain-expand-btn").textContent = chainPanelOpen ? "collapse" : "expand";
+  // fetch eagerly the first time we open if we haven't yet
+  if (chainPanelOpen && chainEntries.length === 0) fetchChainEntries();
+});
+
+// copy head sha
+$("#chain-copy-btn").addEventListener("click", async () => {
+  const head = $("#chain-head-full").textContent || "";
+  if (!head || head === "--") return;
+  const text = head.startsWith("genesis") ? "genesis" : head;
+  const btn = $("#chain-copy-btn");
+  const ok = await copyToClipboard(text);
+  if (ok) {
+    btn.classList.add("copied");
+    btn.textContent = "copied";
+    setTimeout(() => { btn.classList.remove("copied"); btn.textContent = "copy"; }, 1200);
+  } else {
+    btn.textContent = "n/a";
+    setTimeout(() => { btn.textContent = "copy"; }, 1200);
+  }
+});
+
+async function copyToClipboard(text) {
+  try {
+    if (navigator.clipboard && window.isSecureContext) {
+      await navigator.clipboard.writeText(text);
+      return true;
+    }
+  } catch (e) { /* fallthrough */ }
+  // legacy Safari / non-https fallback
+  try {
+    const ta = document.createElement("textarea");
+    ta.value = text;
+    ta.style.position = "fixed";
+    ta.style.left = "-9999px";
+    document.body.appendChild(ta);
+    ta.focus();
+    ta.select();
+    const ok = document.execCommand("copy");
+    document.body.removeChild(ta);
+    return ok;
+  } catch (e) { return false; }
+}
+
+// anchor
+$("#btn-anchor").addEventListener("click", async () => {
+  if (anchorBusy) return;
+  anchorBusy = true;
+  const btn = $("#btn-anchor");
+  const stat = $("#anchor-status");
+  btn.disabled = true;
+  btn.classList.add("anchoring");
+  const origText = btn.textContent;
+  btn.textContent = "anchoring";
+  stat.classList.remove("show", "ok", "dim", "bad");
+  stat.innerHTML = "";
+  try {
+    const res = await fetch("/anchor", { cache: "no-store" });
+    let data = null;
+    try { data = await res.json(); } catch (e) { data = null; }
+    if (res.ok && data && data.ok) {
+      const a = data.attestation || {};
+      const pulse = a.pulse_id || a.pulse || a.beacon_pulse_id || "(unknown)";
+      lastAnchorResult = data;
+      stat.classList.add("show", "ok");
+      stat.innerHTML =
+        `<span class="lbl">anchored</span><span class="v">pulse ${htmlEsc(String(pulse))}</span>` +
+        `<button class="attest-toggle" id="attest-toggle">attestation</button>` +
+        `<pre class="attest-block" id="attest-block">${htmlEsc(JSON.stringify(a, null, 2))}</pre>`;
+      const tg = $("#attest-toggle"), bl = $("#attest-block");
+      if (tg && bl) {
+        tg.addEventListener("click", () => {
+          bl.classList.toggle("show");
+          tg.textContent = bl.classList.contains("show") ? "hide" : "attestation";
+        });
+      }
+    } else if (res.status === 503 || (data && data.reason && /witness offline/i.test(data.reason))) {
+      stat.classList.add("show", "dim");
+      stat.innerHTML = `<span class="lbl">witness</span><span class="v dim">fleet0 offline — chain remains locally verifiable</span>`;
+    } else if (data && data.reason && /empty chain/i.test(data.reason)) {
+      stat.classList.add("show", "dim");
+      stat.innerHTML = `<span class="lbl">chain</span><span class="v dim">empty — nothing to anchor</span>`;
+    } else {
+      stat.classList.add("show", "bad");
+      const why = (data && data.reason) ? data.reason : ("HTTP " + res.status);
+      stat.innerHTML = `<span class="lbl">err</span><span class="v">${htmlEsc(why)}</span>`;
+    }
+  } catch (e) {
+    stat.classList.add("show", "bad");
+    stat.innerHTML = `<span class="lbl">err</span><span class="v">${htmlEsc(e.message || String(e))}</span>`;
+  } finally {
+    btn.classList.remove("anchoring");
+    btn.textContent = origText;
+    btn.disabled = false;
+    anchorBusy = false;
+  }
+});
+
+// ---------- actual-arm readback (ghost) ----------
+async function fetchActual() {
+  try {
+    const res = await fetch("/actual", { cache: "no-store" });
+    if (!res.ok) throw new Error("HTTP " + res.status);
+    const s = await res.json();
+    actualState = s;
+    actualDiffers = computeActualDiffers(state, actualState);
+  } catch (e) {
+    // /actual missing or errored — treat as no divergence
+    actualState = null;
+    actualDiffers = false;
+  }
+}
+
+function computeActualDiffers(cmd, act) {
+  if (!cmd || !act) return false;
+  if (!cmd.fk || !act.fk) return false;
+  // compare each FK joint center available on both sides
+  const keys = ["base", "shoulder", "elbow", "wrist", "tip"];
+  for (const k of keys) {
+    const a = cmd.fk[k], b = act.fk[k];
+    if (!Array.isArray(a) || !Array.isArray(b)) continue;
+    const dx = (a[0] || 0) - (b[0] || 0);
+    const dy = (a[1] || 0) - (b[1] || 0);
+    const dz = (a[2] || 0) - (b[2] || 0);
+    if (Math.hypot(dx, dy, dz) > GHOST_THRESHOLD_MM) return true;
+  }
+  return false;
+}
+
+function drawGhostArm(basis) {
+  if (!showGhost) return;
+  if (!actualState || !actualState.fk) return;
+  if (!actualDiffers) return;
+
+  // desaturated, half-opacity, dashed equivalent of drawArm()
+  const fk = actualState.fk;
+  const base     = fk.base     || [0, 0, 0];
+  const shoulder = fk.shoulder || [0, 0, 84.4];
+  const elbow    = fk.elbow;
+  const wrist    = fk.wrist;
+  const tip      = fk.tip;
+  if (!elbow || !wrist || !tip) return;
+
+  // desaturated INK / accent
+  const ghostInk    = "#7b8888";
+  const ghostAccent = "#5a8d5b";
+  const dash = [4, 3];
+
+  // base column — single dashed line up the spine (cheaper than cylinder)
+  strokeLine3(basis, base, shoulder, { color: ghostInk, width: 1.2, alpha: 0.5, dash: dash });
+
+  // shoulder, elbow, wrist pivot dots (small + faint)
+  dot3(basis, shoulder, { color: ghostAccent, size: 3, alpha: 0.5 });
+  // upper arm
+  strokeLine3(basis, shoulder, elbow, { color: ghostInk, width: 2, alpha: 0.5, dash: dash });
+  dot3(basis, elbow, { color: ghostAccent, size: 2.5, alpha: 0.5 });
+  // forearm
+  strokeLine3(basis, elbow, wrist, { color: ghostInk, width: 2, alpha: 0.5, dash: dash });
+  dot3(basis, wrist, { color: ghostAccent, size: 2.5, alpha: 0.5 });
+  // nozzle stub
+  strokeLine3(basis, wrist, tip, { color: ghostInk, width: 1.5, alpha: 0.5, dash: dash });
+  // ghost tip
+  dot3(basis, tip, { color: ghostAccent, size: 4, alpha: 0.5 });
+}
+
 // ---------- error flash ----------
 function flashError(msg) {
   const f = $("#footer");
@@ -1890,7 +2546,9 @@ function init() {
   setReachStatus(null, "ready");
   fetchState();
   refreshPoses();
+  fetchActual();
   setInterval(fetchState, POLL_MS);
+  setInterval(fetchActual, ACTUAL_POLL_MS);
   setInterval(refreshPoses, 4000);
   setInterval(updateUptime, 1000);
   requestAnimationFrame(frame);
