@@ -1018,13 +1018,41 @@ route_clear _ =
   http_response 200 "OK" "application/json"
     (state_json cp1 cp2 cp3 cp4 csu 1)
 
--- /actual -- stub. In sim mode this is identical to /state. When the
--- real-arm bridge is wired and READ_ANGLE round-trip is working, it
--- will return the arm's actual readback position instead.
-route_actual _ =
+-- /actual -- when bridge=tcp, send AA 55 READ_ANGLE to the real arm
+-- via tools/read_arm_pose.sh and return the arm's reported pulses
+-- (FK computed from those, not from /state). When bridge=fifo or off,
+-- returns /state verbatim (no readback path in those modes today).
+--
+-- The viewer's ghost-arm rendering compares /actual to /state and
+-- draws the dashed ghost when they diverge by >2mm. In sim or fifo
+-- mode they're identical, so the ghost stays invisible.
+
+read_arm_pose_path = "/Users/ledaticempire/projects/ledatic-arm/tools/read_arm_pose.sh"
+
+route_actual_tcp _ =
+  let host = bridge_tcp_host_resolved 0
+  let port = bridge_tcp_port_resolved 0
+  let cmd = join "" ["bash ", read_arm_pose_path, " ", host, " ", show port, " 2>/dev/null"]
+  let result = shell cmd
   let (cp1, cp2, cp3, cp4, csu) = load_state 0
-  http_response 200 "OK" "application/json"
-    (state_json cp1 cp2 cp3 cp4 csu 1)
+  if length result == 0 then
+    http_response 200 "OK" "application/json" (state_json cp1 cp2 cp3 cp4 csu 1)
+  else
+    let parts = str_split " " result
+    if length parts < 3 then
+      http_response 200 "OK" "application/json" (state_json cp1 cp2 cp3 cp4 csu 1)
+    else
+      let ap1 = parse_int_signed (head parts)
+      let ap2 = parse_int_signed (head (tail parts))
+      let ap3 = parse_int_signed (head (tail (tail parts)))
+      http_response 200 "OK" "application/json" (state_json ap1 ap2 ap3 cp4 csu 1)
+
+route_actual _ =
+  let mode = bridge_mode_env 0
+  if mode == "tcp" then route_actual_tcp 0
+  else
+    let (cp1, cp2, cp3, cp4, csu) = load_state 0
+    http_response 200 "OK" "application/json" (state_json cp1 cp2 cp3 cp4 csu 1)
 
 -- /bridge_status -- last byte frame the bridge sent (if any) + mode
 route_bridge_status _ =

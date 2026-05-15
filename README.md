@@ -93,8 +93,32 @@ motion.
 | `/program?name=X` | run program `X.txt` in the background (HTTP 202) |
 | `/program/stop` | kill any running program |
 | `/estop` / `/clear` | emergency stop + release (HTTP 423 on locked routes) |
-| `/actual` | actual arm position (stub; identical to /state in sim mode) |
+| `/actual` | actual arm position. In sim/fifo mode: identical to /state. In TCP bridge mode: sends AA 55 READ_ANGLE and returns the arm's reported pulses |
 | `/bridge_status` | last AA 55 frame the bridge sent + mode |
+
+## Verify + replay the chain
+
+The chain is independently re-derivable. Two tools prove the claim:
+
+```bash
+# Re-derive every entry's SHA-256 from its canonical fields and
+# verify the prev_sha linkage. Exits 0 on full chain integrity.
+tools/verify_chain.py
+tools/verify_chain.py --file ~/.ledatic-arm/chain/armsim_chain.jsonl  # offline
+tools/verify_chain.py --verbose                                       # per-entry
+
+# Replay every commanded pose. Resets to home, then re-issues each
+# /pose / /reach / /home / /poses_load / /nozzle / /suction in idx
+# order. Skips control actions (estop/clear/program_*).
+tools/replay_chain.py
+tools/replay_chain.py --speed 0.5             # half speed
+tools/replay_chain.py --start 50 --end 100    # subrange
+tools/replay_chain.py --dry-run               # print, don't fire
+```
+
+`verify` proves nothing was tampered with after the fact. `replay`
+proves the chain is the complete commanded sequence — you can
+reproduce the trajectory on another arm or another day.
 
 ## Programs
 
@@ -126,7 +150,10 @@ Starters: `wave`, `nod`, `scan`, `dance`. Author your own — drop a
 - [x] E-stop, z-floor, JSON escape, per-PID attest temp
 - [x] Real-arm bridge — `tools/enable_bridge.sh usb|wifi|off`, FIFO + TCP modes
 - [x] `docs/DELIVERY_DAY.md` — 30-minute integration runbook
-- [ ] `/actual` route — wire to `READ_ANGLE` polling once bridge is live
+- [x] `/actual` route — queries `READ_ANGLE` over TCP bridge, verified against fake-arm
+- [x] `tools/verify_chain.py` — independent SHA re-derivation + linkage check
+- [x] `tools/replay_chain.py` — re-issue every chain entry to reproduce the trajectory
+- [ ] `/anchor` — fix fleet0 sign_token rotation so beacon anchoring resumes
 - [ ] Behavior-cloning policy net on top of Rail GPU kernels
 
 ## License
