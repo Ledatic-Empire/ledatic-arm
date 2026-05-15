@@ -1,0 +1,6 @@
+# scan.txt -- horizontal sweep, like searching the workspace
+500 550 700 1500  800 100 off
+200 550 700 1500 1200  50 -
+800 550 700 1500 2000  50 -
+500 550 700 1500 1000   0 off
+500 500 500 1500  800   0 -

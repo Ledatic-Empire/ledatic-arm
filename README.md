@@ -39,17 +39,40 @@ motion.
 | GET | Effect |
 |---|---|
 | `/` | viewer HTML |
-| `/state` | current pulses + joint degrees + FK + chain head |
-| `/pose?p1=&p2=&p3=&p4_us=` | set joint pulses (attested) |
-| `/reach?x=&y=&z=` (mm) | IK + clamp + apply (attested) |
-| `/nozzle?deg=` | set nozzle wrist angle (attested) |
-| `/suction?cmd=on\|vent\|off` | control pump + valve (attested) |
-| `/home` | reset to home (attested) |
+| `/state` | current pulses + joint degrees + FK + chain head + motion plan |
+| `/pose?p1=&p2=&p3=&p4_us=&time_ms=` | set joint pulses; smooth interp over `time_ms` (default 800) |
+| `/reach?x=&y=&z=&time_ms=` (mm) | IK + clamp + smooth motion |
+| `/nozzle?deg=&time_ms=` | set nozzle wrist angle |
+| `/suction?cmd=on\|vent\|off` | control pump + valve |
+| `/home?time_ms=` | reset to home with smooth motion |
 | `/poses` | list named poses |
 | `/poses/save\|load\|delete?name=` | manage poses |
 | `/chain` | append-only attestation chain (every mutating action) |
-| `/anchor` | beacon-anchor the chain head via fleet0 witness (requires Pi online) |
+| `/anchor` | beacon-anchor the chain head via fleet0 witness |
 | `/anchors` | list of historical anchors |
+| `/programs` | list available programs (in `programs/`) |
+| `/program?name=X` | run program `X.txt` in the background (HTTP 202) |
+| `/program/stop` | kill any running program |
+| `/estop` / `/clear` | emergency stop + release (HTTP 423 on locked routes) |
+| `/actual` | actual arm position (stub; identical to /state in sim mode) |
+| `/bridge_status` | last AA 55 frame the bridge sent + mode |
+
+## Programs
+
+Each file in `programs/` is a sequence of poses played back via the
+`tools/program_runner.sh` script. Format (one step per line):
+
+```
+# p1   p2   p3   p4_us  time_ms  wait_ms  suction
+500  600  750  1500     800      100      off
+250  600  750  1500     600      50       -
+800  600  750  1500     600      50       on
+```
+
+`suction` is `on` / `vent` / `off` / `-` (leave unchanged).
+
+Starters: `wave`, `nod`, `scan`, `dance`. Author your own — drop a
+`.txt` file in `programs/`, it appears in `/programs` immediately.
 
 ## Roadmap
 

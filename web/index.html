@@ -1037,6 +1037,114 @@ input[type=range].slider:focus::-webkit-slider-thumb { background: var(--accent)
 .chain-tip .lbl + div { margin-bottom: 6px; }
 .chain-tip .canon { color: var(--mute); }
 .chain-tip .full-sha { color: var(--accent); }
+
+/* ============================================================
+   MOTION indicator (footer)
+   ============================================================ */
+.motion-arrow {
+  display: inline-block;
+  color: var(--accent);
+  margin-left: 6px;
+  letter-spacing: 0;
+  opacity: 0;
+  transition: opacity 0.3s var(--ease);
+  animation: motion-pulse 0.8s ease-in-out infinite;
+  text-shadow: 0 0 6px var(--accent);
+}
+.motion-arrow.show { opacity: 1; }
+@keyframes motion-pulse {
+  0%, 100% { opacity: 1; }
+  50%      { opacity: 0.35; }
+}
+
+input[type=range].slider:disabled { cursor: wait; opacity: 0.6; }
+input[type=range].slider:disabled::-webkit-slider-thumb { background: var(--mute); }
+input[type=range].slider:disabled::-moz-range-thumb { background: var(--mute); }
+
+/* ============================================================
+   PROGRAMS panel
+   ============================================================ */
+.programs-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+.program-row {
+  display: grid;
+  grid-template-columns: auto 1fr auto auto;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 0;
+  border-bottom: 1px dashed var(--grid);
+  font-size: 11px;
+}
+.program-row:last-child { border-bottom: 0; }
+.program-name {
+  color: var(--ink);
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.program-name::before {
+  content: ">";
+  color: var(--accent);
+  margin-right: 6px;
+  opacity: 0.6;
+}
+.program-name.running::before {
+  content: "*";
+  color: var(--accent);
+  opacity: 1;
+  animation: blink 0.6s steps(2,end) infinite;
+}
+.program-desc {
+  color: var(--mute);
+  font-size: 10px;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.program-act {
+  background: transparent;
+  border: 1px solid var(--grid);
+  color: var(--mute);
+  font-family: var(--mono);
+  font-size: 9px;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  padding: 4px 8px;
+  border-radius: var(--radius);
+  cursor: pointer;
+  transition: color 0.15s, border-color 0.15s;
+}
+.program-act.run:hover  { color: var(--accent); border-color: var(--accent-dim); }
+.program-act.stop:hover { color: var(--alert);  border-color: var(--alert-dim); }
+.programs-empty {
+  font-size: 10px;
+  color: var(--mute);
+  letter-spacing: 0.05em;
+  padding: 10px 0;
+  text-align: center;
+}
+.programs-empty::before { content: "( "; color: var(--accent); }
+.programs-empty::after  { content: " )"; color: var(--accent); }
+.programs-refresh {
+  background: transparent;
+  border: 0;
+  color: var(--mute);
+  font-family: var(--mono);
+  font-size: 9px;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  cursor: pointer;
+  padding: 2px 4px;
+  transition: color 0.15s;
+}
+.programs-refresh:hover { color: var(--accent); }
+.programs-refresh::before { content: "[ "; color: var(--axis); }
+.programs-refresh::after  { content: " ]"; color: var(--axis); }
 </style>
 </head>
 <body>
@@ -1176,6 +1284,15 @@ input[type=range].slider:focus::-webkit-slider-thumb { background: var(--accent)
         </div>
       </section>
 
+      <!-- PROGRAMS -->
+      <section class="section">
+        <div class="section-head">
+          <div class="section-title">programs</div>
+          <button class="programs-refresh" id="programs-refresh">refresh</button>
+        </div>
+        <ul class="programs-list" id="programs-list"></ul>
+      </section>
+
       <!-- CHAIN -->
       <section class="section">
         <div class="section-head">
@@ -1224,7 +1341,7 @@ input[type=range].slider:focus::-webkit-slider-thumb { background: var(--accent)
     <span class="sep">·</span>
     <span class="seg"><span class="k">joints</span><span class="v" id="f-joints">[ -- -- -- -- ]°</span></span>
     <span class="sep">·</span>
-    <span class="seg accent"><span class="k">tip</span><span class="v" id="f-tip">(--, --, --) mm</span></span>
+    <span class="seg accent"><span class="k">tip</span><span class="v" id="f-tip">(--, --, --) mm</span><span class="motion-arrow" id="motion-arrow" title="motion in flight">&rarr;</span></span>
     <span class="sep">·</span>
     <span class="seg"><span class="k">suction</span><span class="v" id="f-suction">--</span></span>
     <span class="seg tickers"><span class="k">uptime</span><span class="uptime" id="f-uptime">00:00:00</span></span>
@@ -1295,6 +1412,10 @@ let lastAnchorResult = null;
 // Actual-arm readback (for ghost)
 let actualState = null;         // latest /actual response
 let actualDiffers = false;      // true when commanded vs actual >2mm at any joint
+
+// Motion plan (server-provided eased interpolation)
+let motionActive = false;       // mirrors motion.active for cheap render-loop check
+let sliderLockUntil = 0;        // performance.now() millis until sliders accept input again
 
 // Camera (orbit)
 const cam = {
@@ -1507,6 +1628,66 @@ function hex2rgb(h) {
   return [parseInt(x.substr(0,2),16), parseInt(x.substr(2,2),16), parseInt(x.substr(4,2),16)];
 }
 
+// ---------- forward kinematics (port of armsim.rail fk_full) ----------
+// Pulse-to-degree conversion for each joint (matches src/armsim.rail).
+function pulseToDegJ1(p) { return p * 240 / 1000; }                  // 0..240
+function pulseToDegJ2(p) { return p * (-240) / 1000 + 210; }         // 210..-30 (INVERTED)
+function pulseToDegJ3(p) { return p * 240 / 1000 - 120; }            // -120..120
+function usToDegNozzle(us) { return (us - 1500) * 90 / 1000; }       // -90..90
+
+// Planar FK — returns { base, shoulder, elbow, wrist, tip } in world frame mm.
+// Mirrors armsim.rail fk_full exactly so render-loop interpolation lines up with
+// server FK at the motion endpoint.
+function fkFromPulses(p1, p2, p3) {
+  const L0 = 84.4, L1 = 8.14, L2 = 128.4, L3 = 138.0, L4 = 16.8;
+  const a1d = pulseToDegJ1(p1);
+  const a2d = pulseToDegJ2(p2);
+  const a3d = pulseToDegJ3(p3);
+  let alpha1 = (a1d * Math.PI / 180) + (150 * Math.PI / 180);
+  if (alpha1 > 2 * Math.PI) alpha1 -= 2 * Math.PI;
+  const alpha2 = a2d * Math.PI / 180;
+  const alpha3 = a3d * Math.PI / 180;
+  const beta   = alpha2 - alpha3;
+  const sbSq   = L2 * L2 + L3 * L3 - 2 * L2 * L3 * Math.cos(beta);
+  const sideBeta = Math.sqrt(Math.max(0, sbSq));
+  let cosGamma = (sbSq + L2 * L2 - L3 * L3) / (2 * sideBeta * L2);
+  if (cosGamma >  1) cosGamma =  1;
+  if (cosGamma < -1) cosGamma = -1;
+  const gamma  = Math.acos(cosGamma);
+  const alpha  = (Math.PI - alpha2) - gamma;
+  const cosA1 = Math.cos(alpha1), sinA1 = Math.sin(alpha1);
+
+  const shoulder = [ -L1 * cosA1,                                          L1 * sinA1,                                          L0 ];
+  const elR      = L1 - L2 * Math.cos(alpha2);
+  const elbow    = [ -elR * cosA1,                                         elR * sinA1,                                         L0 + L2 * Math.sin(alpha2) ];
+  const wrR      = L1 + sideBeta * Math.cos(alpha);
+  const wrist    = [ -wrR * cosA1,                                         wrR * sinA1,                                         L0 + sideBeta * Math.sin(alpha) ];
+  const tipR     = wrR + L4;
+  const tip      = [ -tipR * cosA1,                                        tipR * sinA1,                                        L0 + sideBeta * Math.sin(alpha) ];
+  return { base: [0, 0, 0], shoulder, elbow, wrist, tip };
+}
+
+// If state.motion.active, return the interpolated pulses for the current wall-clock.
+// Smoothstep ease: t = t*t*(3-2t). When elapsed > duration_ms snap to to_pulses.
+// Returns null if no motion is in flight (caller should fall back to state.pulses + state.fk).
+function computeMotionPulses() {
+  if (!state || !state.motion || !state.motion.active) return null;
+  const m = state.motion;
+  const from = m.from_pulses, to = m.to_pulses;
+  if (!Array.isArray(from) || !Array.isArray(to) || from.length !== to.length) return null;
+  const dur = Number(m.duration_ms) || 0;
+  const elapsed = Date.now() - Number(m.t_start_ms);
+  if (dur <= 0 || elapsed >= dur) return to.slice();
+  let t = elapsed / dur;
+  if (t < 0) t = 0; else if (t > 1) t = 1;
+  t = t * t * (3 - 2 * t);
+  const cur = new Array(from.length);
+  for (let i = 0; i < from.length; i++) {
+    cur[i] = Math.round(from[i] + (to[i] - from[i]) * t);
+  }
+  return cur;
+}
+
 // ---------- rendering: scene ----------
 function drawScene(basis) {
   // 1. world grid (XY plane at z=0)
@@ -1620,7 +1801,11 @@ function drawRing(basis, center, radius, opts) {
 }
 
 function drawArm(basis) {
-  const fk = state.fk;
+  // motion-aware FK: if a motion plan is in flight, interpolate pulses on the
+  // client and recompute FK so the arm renders smoothly between server ticks.
+  const mp = computeMotionPulses();
+  const liveFK = mp ? fkFromPulses(mp[0], mp[1], mp[2]) : null;
+  const fk = liveFK || state.fk;
   const base     = fk.base     || [0, 0, 0];
   const shoulder = fk.shoulder || [0, 0, 84.4];
   const elbow    = fk.elbow;
@@ -1653,7 +1838,8 @@ function drawArm(basis) {
 
   // Nozzle wrist roll indicator: a perpendicular tick at the wrist,
   // rotated about the wrist-to-tip axis by nozzle_deg.
-  drawNozzleIndicator(basis, wrist, tip, state.nozzle_deg || 0);
+  const nozDeg = mp ? usToDegNozzle(mp[3]) : (state.nozzle_deg || 0);
+  drawNozzleIndicator(basis, wrist, tip, nozDeg);
 
   // Suction tip — colored by state
   const sucState = state.suction || "off";
@@ -1756,6 +1942,24 @@ function frame() {
   $("#view-az").textContent   = (cam.az * 180 / Math.PI).toFixed(0) + "°";
   $("#view-el").textContent   = (cam.el * 180 / Math.PI).toFixed(0) + "°";
   $("#view-zoom").textContent = cam.dist.toFixed(0) + "mm";
+
+  // live tip readout while motion is in flight — recompute FK on the client.
+  const mp = computeMotionPulses();
+  if (mp) {
+    const fk = fkFromPulses(mp[0], mp[1], mp[2]);
+    const t = fk.tip;
+    $("#hud-tip").textContent    = fmtV3(t);
+    $("#hud-nozzle").textContent = usToDegNozzle(mp[3]).toFixed(1);
+    $("#f-tip").textContent      = `(${t[0].toFixed(1)}, ${t[1].toFixed(1)}, ${t[2].toFixed(1)}) mm`;
+    if (!motionActive) {
+      motionActive = true;
+      $("#motion-arrow").classList.add("show");
+    }
+  } else if (motionActive) {
+    // motion just ended — drop indicator (state poll will refresh the static tip text)
+    motionActive = false;
+    $("#motion-arrow").classList.remove("show");
+  }
 
   requestAnimationFrame(frame);
 }
@@ -1979,11 +2183,18 @@ function buildSliders() {
 }
 
 function updateSliders(s) {
+  // motion lock: while motion is in flight (or within the 800ms safety window),
+  // sliders are disabled to prevent the user queueing conflicting /pose requests.
+  const now = performance.now();
+  const locked = sliderLockUntil > now;
+  if (sliderLockUntil && !locked) sliderLockUntil = 0;
+
   // don't fight the user while they're dragging
   for (const j of JOINTS) {
     if (pendingDrag && pendingDrag.key === j.key) continue;
     const inp = document.querySelector(`input[data-key="${j.key}"]`);
     if (!inp) continue;
+    inp.disabled = locked;
     let val;
     if (j.key === "p4_us") {
       val = s.pulses[3];
@@ -2011,6 +2222,14 @@ async function commitJointFromSliders() {
   pendingDrag = null;
   try {
     const s = await api("/pose", params);
+    // Lock sliders until motion completes (or the 800ms safety cap, whichever
+    // is sooner) so the user can't queue conflicting /pose requests mid-flight.
+    if (s && s.motion && s.motion.active && s.motion.duration_ms) {
+      const dur = Math.min(800, Number(s.motion.duration_ms) || 0);
+      sliderLockUntil = performance.now() + dur;
+    } else {
+      sliderLockUntil = performance.now() + 800;
+    }
     applyState(s);
   } catch (e) {
     /* flashError handled by api() */
@@ -2446,6 +2665,84 @@ $("#btn-anchor").addEventListener("click", async () => {
   }
 });
 
+// ---------- programs ----------
+let runningProgram = null;     // name of the program last RUN-clicked (cleared on stop or state-clear)
+
+async function fetchPrograms() {
+  const ul = $("#programs-list");
+  try {
+    const res = await fetch("/programs", { cache: "no-store" });
+    if (!res.ok) {
+      // 404 / 500 — show empty-state, NOT an error flash
+      renderPrograms([]);
+      return;
+    }
+    const arr = await res.json();
+    renderPrograms(Array.isArray(arr) ? arr : []);
+  } catch (e) {
+    // network failure — show empty-state silently
+    renderPrograms([]);
+  }
+}
+
+function renderPrograms(programs) {
+  const ul = $("#programs-list");
+  if (!ul) return;
+  ul.innerHTML = "";
+  if (!programs.length) {
+    const li = document.createElement("li");
+    li.className = "programs-empty";
+    li.textContent = "no programs available — add files to ~/projects/ledatic-arm/programs/";
+    ul.appendChild(li);
+    runningProgram = null;
+    return;
+  }
+  for (const p of programs) {
+    const li = document.createElement("li");
+    li.className = "program-row";
+    const name = htmlEsc(p.name || "");
+    const desc = htmlEsc(p.description || "");
+    const isRunning = runningProgram === p.name;
+    li.innerHTML =
+      `<span class="program-name${isRunning ? " running" : ""}" data-name="${name}" title="${name}">${name}</span>` +
+      `<span class="program-desc" title="${desc}">${desc}</span>` +
+      `<button class="program-act run"  data-name="${name}">[ run ]</button>` +
+      `<button class="program-act stop" data-name="${name}">[ stop ]</button>`;
+    ul.appendChild(li);
+  }
+  ul.querySelectorAll(".program-act.run").forEach(b => {
+    b.addEventListener("click", async () => {
+      const name = b.dataset.name;
+      try {
+        // 202 is success; api() throws on non-2xx so we use raw fetch to allow 202
+        const res = await fetch("/program?name=" + encodeURIComponent(name), { cache: "no-store" });
+        if (!res.ok && res.status !== 202) throw new Error("HTTP " + res.status);
+        runningProgram = name;
+        // re-mark "running" without a full re-fetch
+        document.querySelectorAll(".program-name").forEach(el => {
+          el.classList.toggle("running", el.dataset.name === name);
+        });
+      } catch (e) {
+        flashError(e.message || "run failed");
+      }
+    });
+  });
+  ul.querySelectorAll(".program-act.stop").forEach(b => {
+    b.addEventListener("click", async () => {
+      try {
+        const res = await fetch("/program/stop", { cache: "no-store" });
+        if (!res.ok && res.status !== 202) throw new Error("HTTP " + res.status);
+        runningProgram = null;
+        document.querySelectorAll(".program-name").forEach(el => el.classList.remove("running"));
+      } catch (e) {
+        flashError(e.message || "stop failed");
+      }
+    });
+  });
+}
+
+$("#programs-refresh").addEventListener("click", fetchPrograms);
+
 // ---------- actual-arm readback (ghost) ----------
 async function fetchActual() {
   try {
@@ -2547,6 +2844,7 @@ function init() {
   fetchState();
   refreshPoses();
   fetchActual();
+  fetchPrograms();
   setInterval(fetchState, POLL_MS);
   setInterval(fetchActual, ACTUAL_POLL_MS);
   setInterval(refreshPoses, 4000);

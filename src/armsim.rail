@@ -62,6 +62,18 @@ estop_path = "/tmp/armsim_estop.txt"     -- presence of file = e-stop active
 bridge_status_path  = "/tmp/armsim_bridge_status.txt"
 bridge_default_fifo = "/tmp/armsim_bridge.fifo"
 
+-- ═════ Motion plan path (one motion in flight at a time) ═════
+motion_path = "/tmp/armsim_motion.txt"
+-- Format: 10 newline-separated ints:
+--   t_start_ms, duration_ms,
+--   p1_from, p2_from, p3_from, p4_from,
+--   p1_to, p2_to, p3_to, p4_to
+
+-- ═════ Programs ═════
+programs_dir_default = "/Users/ledaticempire/projects/ledatic-arm/programs"
+program_runner_path = "/Users/ledaticempire/projects/ledatic-arm/tools/program_runner.sh"
+program_pid_path    = "/tmp/armsim_program.pid"
+
 -- ═════ Number formatting helpers ═════
 c_to_d c =
   if c == "0" then 0 else if c == "1" then 1 else if c == "2" then 2
@@ -602,6 +614,50 @@ parse_time_ms_or_default q =
   if length s == 0 then bridge_default_move_ms 0
   else parse_int_signed s
 
+-- ═════ Wall-clock time in milliseconds (used for motion plan timestamps) ═════
+-- Python startup ~50ms; called once per /pose (rare path), never per /state.
+now_ms _ = shell "python3 -c 'import time; print(int(time.time()*1000))' | tr -d '\n'"
+
+-- ═════ Motion plan persistence ═════
+save_motion p1f p2f p3f p4f p1t p2t p3t p4t duration_ms =
+  let ts = now_ms 0
+  let body = join "\n" [ts, show duration_ms,
+                        show p1f, show p2f, show p3f, show p4f,
+                        show p1t, show p2t, show p3t, show p4t, ""]
+  let _ = write_file motion_path body
+  0
+
+motion_is_active _ =
+  let s = read_file motion_path
+  length s > 0
+
+-- read N-th line as int (with default 0)
+motion_nth_int lines n =
+  if lines == [] then 0
+  else if n == 0 then parse_int_signed (head lines)
+  else motion_nth_int (tail lines) (n - 1)
+
+motion_json_object _ =
+  if motion_is_active 0 == 0 then "null"
+  else
+    let content = read_file motion_path
+    let lines = str_split "\n" content
+    let ts   = motion_nth_int lines 0
+    let dur  = motion_nth_int lines 1
+    let p1f  = motion_nth_int lines 2
+    let p2f  = motion_nth_int lines 3
+    let p3f  = motion_nth_int lines 4
+    let p4f  = motion_nth_int lines 5
+    let p1t  = motion_nth_int lines 6
+    let p2t  = motion_nth_int lines 7
+    let p3t  = motion_nth_int lines 8
+    let p4t  = motion_nth_int lines 9
+    join "" ["{\"active\":true,",
+             "\"t_start_ms\":", show ts, ",",
+             "\"duration_ms\":", show dur, ",",
+             "\"from_pulses\":[", show p1f, ",", show p2f, ",", show p3f, ",", show p4f, "],",
+             "\"to_pulses\":[",   show p1t, ",", show p2t, ",", show p3t, ",", show p4t, "]}"]
+
 -- ═════ JSON building ═════
 sf x = show_float x
 
@@ -636,6 +692,7 @@ state_json p1 p2 p3 p4 su reach =
     "\"reachable\":", show reach, ",",
     "\"estop\":", show estop, ",",
     "\"bridge\":\"", bmode, "\",",
+    "\"motion\":", motion_json_object 0, ",",
     "\"chain\":{\"head\":\"", c_head, "\",\"idx\":", show c_idx, "}",
     "}"]
 
@@ -679,9 +736,10 @@ route_pose q =
     let tip_z = fk_tip_z np1 np2 np3
     if tip_z < 5.0 then z_floor_response tip_z
     else
+      let tms = parse_time_ms_or_default q
+      let _ = save_motion cp1 cp2 cp3 cp4 np1 np2 np3 np4 tms
       let _ = save_state np1 np2 np3 np4 csu
       let _ = attest_action "pose" q np1 np2 np3 np4 csu
-      let tms = parse_time_ms_or_default q
       let _ = bridge_send_set_angle np1 np2 np3 tms
       let _ = bridge_send_set_pwm np4 tms
       http_response 200 "OK" "application/json" (state_json np1 np2 np3 np4 csu 1)
@@ -718,9 +776,10 @@ route_reach q =
           let tip_z = fk_tip_z np1 np2 np3
           if tip_z < 5.0 then z_floor_response tip_z
           else
+            let tms = parse_time_ms_or_default q
+            let _ = save_motion cp1 cp2 cp3 cp4 np1 np2 np3 cp4 tms
             let _ = save_state np1 np2 np3 cp4 csu
             let _ = attest_action "reach" q np1 np2 np3 cp4 csu
-            let tms = parse_time_ms_or_default q
             let _ = bridge_send_set_angle np1 np2 np3 tms
             http_response 200 "OK" "application/json" (state_json np1 np2 np3 cp4 csu 1)
 
@@ -765,9 +824,11 @@ route_suction q =
 route_home q =
   if estop_is_active 0 then estop_response 0
   else
+    let (cp1, cp2, cp3, cp4, csu) = load_state 0
+    let tms = parse_time_ms_or_default q
+    let _ = save_motion cp1 cp2 cp3 cp4 home_p1 home_p2 home_p3 home_p4_us tms
     let _ = save_state home_p1 home_p2 home_p3 home_p4_us home_suction
     let _ = attest_action "home" "" home_p1 home_p2 home_p3 home_p4_us home_suction
-    let tms = parse_time_ms_or_default q
     let _ = bridge_send_set_angle home_p1 home_p2 home_p3 tms
     let _ = bridge_send_set_pwm home_p4_us tms
     let _ = bridge_send_suction 3
@@ -856,9 +917,11 @@ route_poses_load q =
       let tip_z = fk_tip_z p1 p2 p3
       if tip_z < 5.0 then z_floor_response tip_z
       else
+        let (cp1, cp2, cp3, cp4, csu) = load_state 0
+        let tms = parse_time_ms_or_default q
+        let _ = save_motion cp1 cp2 cp3 cp4 p1 p2 p3 p4 tms
         let _ = save_state p1 p2 p3 p4 su
         let _ = attest_action "poses_load" q p1 p2 p3 p4 su
-        let tms = parse_time_ms_or_default q
         let _ = bridge_send_set_angle p1 p2 p3 tms
         let _ = bridge_send_set_pwm p4 tms
         http_response 200 "OK" "application/json" (state_json p1 p2 p3 p4 su 1)
@@ -972,6 +1035,57 @@ route_bridge_status _ =
              else s
   http_response 200 "OK" "application/json" body
 
+-- ═════ Programs ═════
+-- Each program is a .txt file in programs/ with one step per line:
+--   <p1> <p2> <p3> <p4_us> <time_ms> <wait_ms> <suction>
+-- Comments start with #.
+
+route_programs _ =
+  let cmd = join "" ["ls -1 ", programs_dir_default, "/*.txt 2>/dev/null | sed 's|.*/||;s|\\.txt$||'"]
+  let listing = shell cmd
+  let lines = str_split "\n" listing
+  let items = pose_list_items lines
+  let body = join "" ["[", join "," items, "]"]
+  http_response 200 "OK" "application/json" body
+
+pose_list_items lines =
+  if lines == [] then []
+  else
+    let line = head lines
+    if length line == 0 then pose_list_items (tail lines)
+    else
+      let item = join "" ["{\"name\":\"", json_escape line, "\"}"]
+      cons item (pose_list_items (tail lines))
+
+-- /program?name=X  -- background-launch the runner
+route_program q =
+  let name = qp_get_str q "name"
+  if length name == 0 then
+    http_response 400 "Bad Request" "application/json" "{\"ok\":false,\"reason\":\"missing name\"}"
+  else
+    let prog_file = join "" [programs_dir_default, "/", name, ".txt"]
+    let exists_check = shell (join "" ["test -f ", prog_file, " && echo y || echo n"])
+    if exists_check == "n" then
+      http_response 404 "Not Found" "application/json"
+        (join "" ["{\"ok\":false,\"reason\":\"program not found\",\"name\":\"", json_escape name, "\"}"])
+    else
+      let _ = shell (join "" ["( bash ", program_runner_path, " ", prog_file,
+                              " & echo $! > ", program_pid_path, " ) >/dev/null 2>&1 &"])
+      let _ = attest_action "program_start" (join "" ["name=", name]) 0 0 0 0 0
+      http_response 202 "Accepted" "application/json"
+        (join "" ["{\"ok\":true,\"program\":\"", json_escape name, "\",\"started\":true}"])
+
+-- /program/stop  -- kill any running runner
+route_program_stop _ =
+  let pid = read_file program_pid_path
+  if length pid == 0 then
+    http_response 200 "OK" "application/json" "{\"ok\":true,\"stopped\":false,\"reason\":\"no program running\"}"
+  else
+    let _ = shell (join "" ["kill ", pid, " 2>/dev/null; pkill -P ", pid, " 2>/dev/null"])
+    let _ = shell (join "" ["rm -f ", program_pid_path])
+    let _ = attest_action "program_stop" "" 0 0 0 0 0
+    http_response 200 "OK" "application/json" "{\"ok\":true,\"stopped\":true}"
+
 -- ═════ Index ═════
 route_index _ =
   let html = read_file html_path
@@ -1008,6 +1122,9 @@ main =
     else if plain == "/clear" then route_clear 0
     else if plain == "/actual" then route_actual 0
     else if plain == "/bridge_status" then route_bridge_status 0
+    else if plain == "/programs" then route_programs 0
+    else if plain == "/program" then route_program query
+    else if plain == "/program/stop" then route_program_stop 0
     else route_404 plain
   let _ = write_file "/dev/stdout" resp
   0

@@ -1,0 +1,10 @@
+# wave.txt -- friendly wave gesture
+# raise arm, swing base back and forth, return home
+# format: p1 p2 p3 p4_us time_ms wait_ms suction
+500 600 750 1500  800 100 off
+250 600 750 1500  600  50 -
+750 600 750 1500  600  50 -
+250 600 750 1500  600  50 -
+750 600 750 1500  600  50 -
+500 600 750 1500  600  50 -
+500 500 500 1500 1000   0 off
