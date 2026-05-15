@@ -36,9 +36,9 @@ fi
 if [[ ! -f /tmp/armsim_poses.txt ]]; then
   cat > /tmp/armsim_poses.txt <<POSES
 home 500 500 500 1500 0
-park 500 700 470 1500 0
+ready 450 540 580 1500 0
 reach-front 500 500 700 1500 0
-reach-down 500 700 700 1500 0
+reach-low 500 600 600 1500 0
 POSES
 fi
 

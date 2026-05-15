@@ -1415,7 +1415,7 @@ let actualDiffers = false;      // true when commanded vs actual >2mm at any joi
 
 // Motion plan (server-provided eased interpolation)
 let motionActive = false;       // mirrors motion.active for cheap render-loop check
-let sliderLockUntil = 0;        // performance.now() millis until sliders accept input again
+// sliderLockUntil removed -- the lock made the UI feel frozen, server is fine with rapid commits
 
 // Camera (orbit)
 const cam = {
@@ -2183,18 +2183,14 @@ function buildSliders() {
 }
 
 function updateSliders(s) {
-  // motion lock: while motion is in flight (or within the 800ms safety window),
-  // sliders are disabled to prevent the user queueing conflicting /pose requests.
-  const now = performance.now();
-  const locked = sliderLockUntil > now;
-  if (sliderLockUntil && !locked) sliderLockUntil = 0;
-
+  // (the previous slider lock was too aggressive — yanked. Server handles
+  // concurrent /pose fine; the last write wins, chain entries record each.)
   // don't fight the user while they're dragging
   for (const j of JOINTS) {
     if (pendingDrag && pendingDrag.key === j.key) continue;
     const inp = document.querySelector(`input[data-key="${j.key}"]`);
     if (!inp) continue;
-    inp.disabled = locked;
+    inp.disabled = false;
     let val;
     if (j.key === "p4_us") {
       val = s.pulses[3];
@@ -2222,14 +2218,6 @@ async function commitJointFromSliders() {
   pendingDrag = null;
   try {
     const s = await api("/pose", params);
-    // Lock sliders until motion completes (or the 800ms safety cap, whichever
-    // is sooner) so the user can't queue conflicting /pose requests mid-flight.
-    if (s && s.motion && s.motion.active && s.motion.duration_ms) {
-      const dur = Math.min(800, Number(s.motion.duration_ms) || 0);
-      sliderLockUntil = performance.now() + dur;
-    } else {
-      sliderLockUntil = performance.now() + 800;
-    }
     applyState(s);
   } catch (e) {
     /* flashError handled by api() */
@@ -2742,6 +2730,11 @@ function renderPrograms(programs) {
 }
 
 $("#programs-refresh").addEventListener("click", fetchPrograms);
+
+// Auto-refresh the programs list every 10s so it appears after the
+// page mounts even if /programs wasn't ready on the very first fetch
+// (e.g. if the viewer loaded before a fresh server restart).
+setInterval(fetchPrograms, 10000);
 
 // ---------- actual-arm readback (ghost) ----------
 async function fetchActual() {
