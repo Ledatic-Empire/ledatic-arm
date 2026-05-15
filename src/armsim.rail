@@ -45,6 +45,13 @@ state_path = "/tmp/armsim_state.txt"
 poses_path = "/tmp/armsim_poses.txt"
 html_path  = "/tmp/armsim_index.html"
 
+-- ═════ Attestation chain paths ═════
+chain_path      = "/tmp/armsim_chain.jsonl"
+chain_head_path = "/tmp/armsim_chain_head.txt"
+chain_idx_path  = "/tmp/armsim_chain_idx.txt"
+attest_tmp_path = "/tmp/armsim_attest_tmp"
+anchor_path     = "/tmp/armsim_anchors.jsonl"
+
 -- ═════ Number formatting helpers ═════
 c_to_d c =
   if c == "0" then 0 else if c == "1" then 1 else if c == "2" then 2
@@ -321,6 +328,64 @@ suction_label s =
   else if s == 2 then "venting"
   else "off"
 
+-- ═════ Attestation chain ═════
+-- Every mutating route appends an entry to /tmp/armsim_chain.jsonl:
+--   {"idx":N,"t":"...","kind":"...","params":"...",
+--    "state_sha":"...","prev_sha":"...","sha":"..."}
+-- where sha = SHA-256("<prev_sha>|<t>|<kind>|<params>|<state_sha>").
+-- The chain is self-contained and tamper-evident locally; on-demand
+-- /anchor publishes the head to the ledatic.org entropy beacon via
+-- the existing rail/tools/attest/attest.rail pipeline.
+
+-- Rail's `shell` returns the command output INCLUDING trailing newline.
+-- Pipe through `tr -d '\n'` so values embedded in JSON strings don't
+-- carry literal control characters.
+now_utc _ = shell "date -u +%FT%TZ | tr -d '\n'"
+
+sha256_of data =
+  let _ = write_file attest_tmp_path data
+  shell (join "" ["shasum -a 256 ", attest_tmp_path, " | cut -d\" \" -f1 | tr -d '\n'"])
+
+chain_current_head _ =
+  let h = read_file chain_head_path
+  if length h == 0 then "genesis" else h
+
+chain_current_idx _ =
+  let s = read_file chain_idx_path
+  if length s == 0 then 0 else parse_int_signed s
+
+-- Hash the action data directly (not the full state_json) so the chain
+-- can be updated BEFORE state_json is built. This lets /state and the
+-- response from mutating routes both show the up-to-date chain head.
+--
+-- state_canon = "p1,p2,p3,p4_us,suction" -- deterministic, FK is derivable.
+attest_action kind params p1 p2 p3 p4 su =
+  let prev = chain_current_head 0
+  let next_idx = (chain_current_idx 0) + 1
+  let t = now_utc 0
+  let state_canon = join "," [show p1, show p2, show p3, show p4, show su]
+  let canonical = join "|" [prev, t, kind, params, state_canon]
+  let new_sha = sha256_of canonical
+  let entry = join "" ["{\"idx\":", show next_idx,
+                       ",\"t\":\"", t,
+                       "\",\"kind\":\"", kind,
+                       "\",\"params\":\"", params,
+                       "\",\"state\":\"", state_canon,
+                       "\",\"prev_sha\":\"", prev,
+                       "\",\"sha\":\"", new_sha, "\"}\n"]
+  let existing = read_file chain_path
+  let _ = write_file chain_path (join "" [existing, entry])
+  let _ = write_file chain_head_path new_sha
+  let _ = write_file chain_idx_path (show next_idx)
+  new_sha
+
+filter_nonempty lst =
+  if lst == [] then []
+  else
+    let h = head lst
+    if length h == 0 then filter_nonempty (tail lst)
+    else cons h (filter_nonempty (tail lst))
+
 -- ═════ JSON building ═════
 sf x = show_float x
 
@@ -331,6 +396,8 @@ state_json p1 p2 p3 p4 su reach =
   let d3 = pulse_to_deg_j3 p3
   let d4 = us_to_deg_nozzle p4
   let s_lbl = suction_label su
+  let c_head = chain_current_head 0
+  let c_idx = chain_current_idx 0
   join "" [
     "{",
     "\"arm\":\"maxarm\",",
@@ -348,7 +415,8 @@ state_json p1 p2 p3 p4 su reach =
     "\"suction\":\"", s_lbl, "\",",
     "\"links_mm\":[84.4,8.14,128.4,138.0,16.8],",
     "\"limits\":{\"z_max\":225,\"xy_min_radius\":50},",
-    "\"reachable\":", show reach,
+    "\"reachable\":", show reach, ",",
+    "\"chain\":{\"head\":\"", c_head, "\",\"idx\":", show c_idx, "}",
     "}"]
 
 state_json_current _ =
@@ -377,8 +445,6 @@ route_pose q =
   let raw_p2 = qp_get q "p2"
   let raw_p3 = qp_get q "p3"
   let raw_p4 = qp_get q "p4_us"
-  -- If a param is absent, qp_get returns 0; we keep current state instead.
-  -- Sentinel: if param string is empty in query, treat as "use current".
   let q_pairs = str_split "&" q
   let s_p1 = qp_search_str q_pairs "p1"
   let s_p2 = qp_search_str q_pairs "p2"
@@ -389,7 +455,9 @@ route_pose q =
   let np3 = if length s_p3 == 0 then cp3 else clamp_int j3_p_lo j3_p_hi raw_p3
   let np4 = if length s_p4 == 0 then cp4 else clamp_int j4_us_lo j4_us_hi raw_p4
   let _ = save_state np1 np2 np3 np4 csu
-  http_response 200 "OK" "application/json" (state_json np1 np2 np3 np4 csu 1)
+  let _ = attest_action "pose" q np1 np2 np3 np4 csu
+  let body = state_json np1 np2 np3 np4 csu 1
+  http_response 200 "OK" "application/json" body
 
 -- /reach?x=&y=&z= (mm)
 route_reach q =
@@ -402,10 +470,12 @@ route_reach q =
   let ysq = pow y 2.0
   let r_xy = sqrt (xsq + ysq)
   if r_xy < 50.0 then
+    let _ = attest_action "reach_unreachable" q cp1 cp2 cp3 cp4 csu
     http_response 200 "OK" "application/json" (state_json cp1 cp2 cp3 cp4 csu 0)
   else
     let (a1, a2, a3, ok) = ik_solve x y z_clamped
     if ok == 0 then
+      let _ = attest_action "reach_unreachable" q cp1 cp2 cp3 cp4 csu
       http_response 200 "OK" "application/json" (state_json cp1 cp2 cp3 cp4 csu 0)
     else
       let raw_p1 = float_round (deg_to_pulse_j1 a1)
@@ -415,6 +485,7 @@ route_reach q =
       let np2 = clamp_int j2_p_lo j2_p_hi raw_p2
       let np3 = clamp_int j3_p_lo j3_p_hi raw_p3
       let _ = save_state np1 np2 np3 cp4 csu
+      let _ = attest_action "reach" q np1 np2 np3 cp4 csu
       http_response 200 "OK" "application/json" (state_json np1 np2 np3 cp4 csu 1)
 
 -- /nozzle?deg=
@@ -429,6 +500,7 @@ route_nozzle q =
   let us_i = float_round us_f
   let np4 = clamp_int j4_us_lo j4_us_hi us_i
   let _ = save_state cp1 cp2 cp3 np4 csu
+  let _ = attest_action "nozzle" q cp1 cp2 cp3 np4 csu
   http_response 200 "OK" "application/json" (state_json cp1 cp2 cp3 np4 csu 1)
 
 -- /suction?cmd=on|vent|off
@@ -440,11 +512,13 @@ route_suction q =
             else if cmd == "off" then 0
             else csu
   let _ = save_state cp1 cp2 cp3 cp4 nsu
+  let _ = attest_action "suction" q cp1 cp2 cp3 cp4 nsu
   http_response 200 "OK" "application/json" (state_json cp1 cp2 cp3 cp4 nsu 1)
 
 -- /home
 route_home _ =
   let _ = save_state home_p1 home_p2 home_p3 home_p4_us home_suction
+  let _ = attest_action "home" "" home_p1 home_p2 home_p3 home_p4_us home_suction
   http_response 200 "OK" "application/json" (state_json home_p1 home_p2 home_p3 home_p4_us home_suction 1)
 
 -- ═════ Named poses ═════
@@ -526,6 +600,7 @@ route_poses_load q =
     let p4 = clamp_int j4_us_lo j4_us_hi (parse_int_signed (head (tail (tail (tail (tail parts))))))
     let su = parse_int_signed (head (tail (tail (tail (tail (tail parts))))))
     let _ = save_state p1 p2 p3 p4 su
+    let _ = attest_action "poses_load" q p1 p2 p3 p4 su
     http_response 200 "OK" "application/json" (state_json p1 p2 p3 p4 su 1)
 
 route_poses_delete q =
@@ -536,6 +611,69 @@ route_poses_delete q =
   let suffix = if pruned == [] then "" else "\n"
   let _ = write_file poses_path (join "" [body, suffix])
   route_poses 0
+
+-- ═════ Attestation chain endpoints ═════
+
+-- /chain  -- returns the JSONL chain wrapped as a JSON array
+route_chain _ =
+  let content = read_file chain_path
+  let lines = str_split "\n" content
+  let entries = filter_nonempty lines
+  let body = join "" ["[", join "," entries, "]"]
+  http_response 200 "OK" "application/json" body
+
+-- /anchor  -- shells out to rail/tools/attest/attest.rail to beacon-anchor
+-- the current chain head against ledatic.org/entropy/pulse. Result is
+-- appended to /tmp/armsim_anchors.jsonl. Returns the anchor JSON (or an
+-- error JSON if attest.rail is unavailable / Pi witness offline).
+
+anchor_input_path = "/tmp/armsim_chain_head_anchor.txt"
+
+-- Fast pre-check: if fleet0 witness is unreachable, don't even try
+-- running attest.rail (which would hang on the HTTP POST to /sign).
+witness_alive _ =
+  let probe = shell "curl -s -o /dev/null -w '%{http_code}' --max-time 2 http://100.87.231.45:9102/health 2>/dev/null | tr -d '\n'"
+  if probe == "200" then 1 else 0
+
+run_anchor_attest head_sha =
+  let _ = write_file anchor_input_path head_sha
+  let _ = shell "rm -f /tmp/armsim_chain_head_anchor.txt.attestation.json"
+  let cmd = "cd $HOME/projects/rail && $HOME/projects/rail/rail_native run tools/attest/attest.rail /tmp/armsim_chain_head_anchor.txt > /tmp/armsim_attest_run.log 2>&1"
+  let _ = shell cmd
+  read_file "/tmp/armsim_chain_head_anchor.txt.attestation.json"
+
+anchor_success_body head_sha head_idx attest_json =
+  let t = now_utc 0
+  let anchor_entry = join "" ["{\"t\":\"", t, "\",\"head_idx\":", show head_idx, ",\"head_sha\":\"", head_sha, "\",\"attestation\":", attest_json, "}\n"]
+  let existing = read_file anchor_path
+  let _ = write_file anchor_path (join "" [existing, anchor_entry])
+  join "" ["{\"ok\":true,\"head_sha\":\"", head_sha, "\",\"head_idx\":", show head_idx, ",\"attestation\":", attest_json, "}"]
+
+anchor_fail_body head_sha head_idx =
+  join "" ["{\"ok\":false,\"reason\":\"attest.rail produced no output (Pi witness offline?)\",\"head_sha\":\"", head_sha, "\",\"head_idx\":", show head_idx, "}"]
+
+route_anchor _ =
+  let head_sha = chain_current_head 0
+  let head_idx = chain_current_idx 0
+  if head_sha == "genesis" then
+    http_response 200 "OK" "application/json" "{\"ok\":false,\"reason\":\"empty chain\"}"
+  else if witness_alive 0 == 0 then
+    http_response 503 "Service Unavailable" "application/json"
+      (join "" ["{\"ok\":false,\"reason\":\"fleet0 witness offline\",\"head_sha\":\"", head_sha, "\",\"head_idx\":", show head_idx, "}"])
+  else
+    let attest_json = run_anchor_attest head_sha
+    if length attest_json == 0 then
+      http_response 502 "Bad Gateway" "application/json" (anchor_fail_body head_sha head_idx)
+    else
+      http_response 200 "OK" "application/json" (anchor_success_body head_sha head_idx attest_json)
+
+-- /anchors  -- list of historical anchors
+route_anchors _ =
+  let content = read_file anchor_path
+  let lines = str_split "\n" content
+  let entries = filter_nonempty lines
+  let body = join "" ["[", join "," entries, "]"]
+  http_response 200 "OK" "application/json" body
 
 -- ═════ Index ═════
 route_index _ =
@@ -566,6 +704,9 @@ main =
     else if plain == "/poses/save" then route_poses_save query
     else if plain == "/poses/load" then route_poses_load query
     else if plain == "/poses/delete" then route_poses_delete query
+    else if plain == "/chain" then route_chain 0
+    else if plain == "/anchor" then route_anchor 0
+    else if plain == "/anchors" then route_anchors 0
     else route_404 plain
   let _ = write_file "/dev/stdout" resp
   0

@@ -22,7 +22,7 @@ def handle(conn):
         with REQ_LOCK:
             with open(REQ_FILE, "wb") as fh:
                 fh.write(data)
-            r = subprocess.run([HANDLER], capture_output=True, timeout=5)
+            r = subprocess.run([HANDLER], capture_output=True, timeout=30)
         conn.sendall(r.stdout)
     except Exception as exc:
         body = f"500 armsim error: {exc}".encode()

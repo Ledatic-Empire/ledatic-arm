@@ -34,14 +34,34 @@ every commanded pose carries an attestation tuple
 `(state, action, model_hash, kernel_hash, beacon_pulse)`. Auditable
 motion.
 
+## Routes
+
+| GET | Effect |
+|---|---|
+| `/` | viewer HTML |
+| `/state` | current pulses + joint degrees + FK + chain head |
+| `/pose?p1=&p2=&p3=&p4_us=` | set joint pulses (attested) |
+| `/reach?x=&y=&z=` (mm) | IK + clamp + apply (attested) |
+| `/nozzle?deg=` | set nozzle wrist angle (attested) |
+| `/suction?cmd=on\|vent\|off` | control pump + valve (attested) |
+| `/home` | reset to home (attested) |
+| `/poses` | list named poses |
+| `/poses/save\|load\|delete?name=` | manage poses |
+| `/chain` | append-only attestation chain (every mutating action) |
+| `/anchor` | beacon-anchor the chain head via fleet0 witness (requires Pi online) |
+| `/anchors` | list of historical anchors |
+
 ## Roadmap
 
-- [ ] `arms/maxarm.json` — geometry/limits from LewanSoul specs; every value tagged "calibrate on delivery"
-- [ ] `src/armsim.rail` — config-driven FK/IK, HTTP handler, state, named poses
-- [ ] `web/index.html` — 3D viewer matching MaxArm geometry
-- [ ] `protocols/lewansoul.rail` — ESP32 wire protocol (reverse from their Python SDK)
-- [ ] Attestation wrapper — sign every `(state, action)` via fleet0 witness
-- [ ] `docs/DELIVERY_DAY.md` — unbox -> measure -> calibrate -> smoke-test runbook
+- [x] `arms/maxarm.json` — geometry/limits firmware-canonical from Hiwonder source
+- [x] `src/armsim.rail` — FK/IK byte-ported from `_espmax.cpp`, HTTP handler, state, named poses
+- [x] `web/index.html` — 3D viewer matching MaxArm geometry
+- [x] `protocols/lewansoul.rail` — AA 55 byte protocol, 9/9 self-tests PASS
+- [x] Attestation chain — every mutating action SHA-chained at `/chain`
+- [x] On-demand beacon anchor — `/anchor` invokes the existing fleet0 witness pipeline
+- [x] `docs/DELIVERY_DAY.md` — 30-minute integration runbook
+- [ ] Real-arm bridge — `ARMSIM_AA55_HOST` env wires `/pose` into the byte protocol
+- [ ] Viewer chain UI — render the chain head and recent entries in the right panel
 - [ ] Behavior-cloning policy net on top of Rail GPU kernels
 
 ## License
