@@ -68,10 +68,22 @@ docs/        phase docs, calibration notes, delivery runbook
 
 Every kernel the GPU runs and every byte the network sends is
 Rail-emitted, replayable, and signed against the public entropy beacon
-at <https://ledatic.org/entropy>. The arm makes that thesis physical:
-every commanded pose carries an attestation tuple
-`(state, action, model_hash, kernel_hash, beacon_pulse)`. Auditable
-motion.
+at <https://ledatic.org/entropy>. The arm makes that thesis physical
+in two layers:
+
+- **Per-pose**: every commanded pose is recorded in a tamper-evident
+  hash chain `(t, kind, params, state, prev_sha, sha)`. Any chain edit
+  invalidates every subsequent `sha`.
+- **Per-head**: the current chain head can be anchored to the public
+  entropy beacon on demand via `/anchor`, which signs the head via
+  the fleet0 witness (`pk_fp=cac5f21a70564aeb`) and writes the signed
+  attestation to `~/.ledatic-arm/chain/armsim_anchors.jsonl`.
+
+The roadmap is to fold model_hash, kernel_hash, and beacon_pulse into
+every per-pose record so each motion is independently auditable
+without needing the head anchor — not yet implemented; see
+`tools/audit/spurarm_chain_schema_audit.sh` in the rail repo for the
+current substrate gap.
 
 ## Routes
 
