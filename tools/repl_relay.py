@@ -116,6 +116,12 @@ while True:
                     total = 4 + length + 1          # AA 55 FUNC LEN data[length] CHKSUM
                     if len(buf) < total: break      # wait for the rest
                     data = bytes(buf[4:4 + length])
+                    cks  = buf[4 + length]
+                    calc = (255 - ((func + length + sum(data)) % 256)) % 256
+                    if cks != calc:                 # mis-aligned / corrupt -> reject + resync
+                        log("  BAD CKSUM (got 0x%02x want 0x%02x func=0x%02x len=%d) -> drop+resync" % (cks, calc, func, length))
+                        del buf[:2]                 # drop this AA 55, hunt the next header
+                        continue
                     del buf[:total]
                     handle(func, data)
     except Exception as e:
