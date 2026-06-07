@@ -16,8 +16,8 @@ char_from_int(0) yields an empty string -> raw binary drops every 0x00 byte
 Translations (v1):
   0x01 SET_ANGLE  p1,p2,p3,t  -> arm.set_servo(1,p1,t);arm.set_servo(2,p2,t);arm.set_servo(3,p3,t)
   0x03 SET_XYZ    x,y,z,t     -> arm.set_position((x,y,z),t)
-  0x05 SET_PWMSERVO           -> logged, NOT sent (wrist API unconfirmed — v2)
-  0x07 SET_SUCTION            -> logged, NOT sent (nozzle API unconfirmed — v2)
+  0x05 SET_PWMSERVO us,t      -> nozzle.set_angle(deg,t)   (wrist; us->deg, us clamped)
+  0x07 SET_SUCTION cmd        -> nozzle.on() / nozzle.off()  (vacuum pump on / vent)
   0x11/0x13 READ_*           -> ignored (this bridge is one-way)
 
 Usage:  repl_relay.py <serial_dev> <baud=115200> <fifo>
@@ -64,6 +64,12 @@ def clamp_axis(axis, v):
     if c != v: log("  CLAMP %s %d -> %d (safe %d..%d)" % (axis, v, c, lo, hi))
     return c
 
+def clamp_us(us):
+    lo, hi = SAFE_WRIST_US
+    c = max(lo, min(hi, us))
+    if c != us: log("  CLAMP wrist_us %d -> %d (safe %d..%d)" % (us, c, lo, hi))
+    return c
+
 ser = serial.Serial(DEV, BAUD, timeout=0.5)
 time.sleep(2.5)                      # ESP32 reboots when the port opens
 ser.reset_input_buffer()
@@ -95,10 +101,15 @@ def handle(func, data):
         z = clamp_axis("z", le16(data[4], data[5])); t = le16(data[6], data[7])
         cmd = "arm.set_position((%d,%d,%d),%d)" % (x, y, z, t)
         log("  SET_XYZ -> (%d,%d,%d) t=%d" % (x, y, z, t)); send(cmd)
-    elif func == 0x05:                            # SET_PWMSERVO (wrist)
-        log("  SET_PWMSERVO %s -> skipped (v1)" % (data.hex(),))
-    elif func == 0x07:                            # SET_SUCTION
-        log("  SET_SUCTION %s -> skipped (v1)" % (data.hex(),))
+    elif func == 0x05 and len(data) == 4:        # SET_PWMSERVO -> wrist (nozzle PWM servo)
+        us = clamp_us(le16(data[0], data[1])); t = le16(data[2], data[3])
+        ang = int(round((us - 1500) * 90.0 / 1000.0))   # 500..2500us -> -90..90 deg
+        log("  SET_PWMSERVO us=%d -> wrist %d deg t=%d" % (us, ang, t))
+        send("nozzle.set_angle(%d,%d)" % (ang, t))
+    elif func == 0x07 and len(data) >= 1:        # SET_SUCTION -> vacuum pump
+        sc = data[0]                              # 0x01=pump_on, 0x02/0x03=vent/close
+        c = "nozzle.on()" if sc == 0x01 else "nozzle.off()"
+        log("  SET_SUCTION 0x%02x -> %s" % (sc, c)); send(c)
     else:
         log("  func=0x%02x len=%d -> skip" % (func, len(data)))
 

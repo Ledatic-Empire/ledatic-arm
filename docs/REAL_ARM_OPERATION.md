@@ -57,8 +57,10 @@ browser viewer ──HTTP──> armsim.rail (Rail sim, computes FK/poses)
                               │
                    tools/repl_relay.py  ── parses hex, checksum-validates,
                               │            CLAMPS to safe ranges, translates:
-                              │              SET_ANGLE  -> arm.set_servo(1..3,p,t)
-                              │              SET_XYZ    -> arm.set_position((x,y,z),t)
+                              │              SET_ANGLE    -> arm.set_servo(1..3,p,t)
+                              │              SET_XYZ      -> arm.set_position((x,y,z),t)
+                              │              SET_PWMSERVO -> nozzle.set_angle(deg,t)  (wrist)
+                              │              SET_SUCTION  -> nozzle.on()/off()        (vacuum pump)
                               ▼
                   /dev/cu.usbserial-210 @ 115200  ── MicroPython REPL ── servos
 ```
@@ -102,12 +104,13 @@ slider, or IK target can over-drive a joint. Limits live in
 **Measured 2026-06-07** (`tools/arm_limits.py`, via `get_position` stall detection,
 each joint jogged from home in isolation):
 
-| Servo | Pulse range (safe) | Notes |
+| Servo | Safe range | Notes |
 |---|---|---|
-| 1 base_yaw | **185 – 815** | moved freely to the caps, no hard stop reached — true loom limit is wider |
-| 2 shoulder | **355 – 665** | firmware also clamps > 700 |
-| 3 elbow | **488 – 710** | firmware also clamps < 470 |
-| 4 wrist (PWM µs) | 700 – 2300 | not yet translated (v2) |
+| 1 base_yaw | **120 – 880** (pulse) | jogged free 86–912 with no stall — true loom limit is wider |
+| 2 shoulder | **315 – 685** (pulse) | free 304–695; firmware also clamps > 700 |
+| 3 elbow | **490 – 725** (pulse) | free 484–735; firmware also clamps < 470 |
+| 4 wrist | **600 – 2400 µs** (≈ ±81°) | small LFD-01M PWM servo (`nozzle.set_angle`); open-loop, no feedback; swept ±80° clean |
+| suction | `nozzle.on()` / `off()` | vacuum pump on / vent — no position, just on/off |
 | XYZ box | x ±130, y −230..−90, z 120..260 | conservative box around ORIGIN (0,−163,212) |
 
 ⚠️ These are **per-servo** limits found with the other joints at home. They do
@@ -125,11 +128,13 @@ arm.set_joint(id, angle, dur)    arm.go_home()                 arm.teaching_mode
 arm.read_position() -> (x,y,z)   arm.verify_position           arm.ORIGIN = (0,-163,212)
 arm.bus_servo.run(id, pulse, dur)   .load(id) / .unload(id)    .get_position(id)
 arm.bus_servo.get_vin(id) -> mV     .stop(id) / .set_mode      .get_offset / .save_offset
+nozzle.set_angle(deg, dur)          # wrist (PWM nozzle servo), deg -90..90
+nozzle.on() / nozzle.off()          # vacuum pump: suck / vent
+nozzle.pump_f / pump_b / valve_f / valve_b   # pump + valve H-bridge primitives
 ```
 
 ## 8. Known gaps / v2
 
-- **Wrist (PWM) + suction** translation — `repl_relay.py` logs and skips these.
 - **Relax button in the viewer** — no `/relax` route yet; relax is `teaching_mode()`
   over the REPL only.
 - **Combined-pose / workspace collision limits** — not measured (needs supervised run).

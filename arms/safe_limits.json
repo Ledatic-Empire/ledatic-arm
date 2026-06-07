@@ -1,12 +1,12 @@
 {
-  "_comment": "Per-servo SAFE pulse ranges for the physical MaxArm, loaded by tools/repl_relay.py to clamp every translated command. See docs/REAL_ARM_OPERATION.md.",
-  "_measured": "2026-06-07 via get_position stall-finder (tools/arm_limits.py). Each joint jogged from home in isolation; values are verified-NO-STALL within conservative caps, with a small inward margin. True mechanical limits are WIDER (no hard stop was reached within the caps). These are per-servo limits from home — COMBINED poses can still collide with the table/itself; the firmware clamps (servo2<=700, servo3>=470) are also enforced downstream.",
+  "_comment": "Per-servo SAFE ranges for the physical MaxArm, loaded by tools/repl_relay.py to clamp every translated command. See docs/REAL_ARM_OPERATION.md.",
+  "_measured": "2026-06-07 via tools/arm_limits.py (get_position stall-finder, servos 1-3) and a wrist sweep (servo 4, nozzle.set_angle, open-loop PWM, no feedback). Each joint jogged from home in isolation. Servos 1-3 moved FREELY across wide caps with NO hard stall (base free 86-912, shoulder 304-695, elbow 484-735) -> these ranges carry inward margin and are well within the true mechanical limits; the firmware also clamps shoulder<=700 and elbow>=470. The wrist swept +/-80deg clean. These are PER-SERVO limits from home -- COMBINED poses can still collide with the table/itself (not measured).",
   "servo_pulse": {
-    "1": [185, 815],
-    "2": [355, 665],
-    "3": [488, 710]
+    "1": [120, 880],
+    "2": [315, 685],
+    "3": [490, 725]
   },
-  "wrist_us": [700, 2300],
+  "wrist_us": [600, 2400],
   "xyz": {
     "x": [-130, 130],
     "y": [-230, -90],
