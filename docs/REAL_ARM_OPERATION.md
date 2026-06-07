@@ -81,6 +81,10 @@ tools/enable_bridge.sh off             # back to sim-only (no relay)
 tools/enable_bridge.sh status          # show bridge state
 ```
 
+- **E-STOP**: the viewer's STOP button (or `Esc`) hits `GET /estop` → halts in-flight
+  motion (`bus_servo.stop` via a HALT frame, func `0x7F`), drops suction, sets the
+  estop flag (`/tmp/armsim_estop.txt`), and locks out every mutating route until
+  `GET /clear`. `/state` reports `estop`; the servos hold (don't drop) then auto-relax.
 - A LaunchAgent **`com.ledatic.armbridge`** (`tools/armbridge_keepalive.sh`) revives
   the bridge after a Mac sleep, in the right mode. It sends **no** arm commands.
 - Opening the serial port **resets the ESP32** (DTR), so the arm re-inits whenever

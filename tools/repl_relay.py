@@ -137,6 +137,10 @@ def handle(func, data):
     elif func == 0x07 and len(data) >= 1:        # SET_SUCTION -> vacuum pump
         sc = data[0]; c = "nozzle.on()" if sc == 0x01 else "nozzle.off()"
         log("  SET_SUCTION 0x%02x -> %s" % (sc, c)); aux_send(c)
+    elif func == 0x7F:                            # HALT (e-stop) -> stop in-flight motion NOW
+        log("  HALT (e-stop) -> bus_servo.stop(1..3)")
+        with _lock:
+            _send("arm.bus_servo.stop(1);arm.bus_servo.stop(2);arm.bus_servo.stop(3)")
     else:
         log("  func=0x%02x len=%d -> skip" % (func, len(data)))
 
