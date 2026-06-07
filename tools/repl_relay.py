@@ -19,7 +19,7 @@ Translations (v1):
 
 Usage:  repl_relay.py <serial_dev> <baud=115200> <fifo>
 """
-import sys, time, serial
+import os, sys, time, json, serial
 
 DEV  = sys.argv[1]
 BAUD = int(sys.argv[2]) if len(sys.argv) > 2 else 115200
@@ -27,6 +27,39 @@ FIFO = sys.argv[3]
 
 def log(m):
     sys.stderr.write(m + "\n"); sys.stderr.flush()
+
+# ── Safe operating ranges — the SAFETY CLAMP (every command bounded here) ──
+# CONSERVATIVE defaults; refine empirically and drop the result in
+# arms/safe_limits.json (loaded below). j1 (base_yaw) has NO firmware clamp —
+# its only stop is the wiring loom, so it is the one that STALLS when a program
+# sweeps it to 200/800. It MUST be bounded here. j2/j3 are firmware-clamped but
+# we stay well inside to avoid over-extension / self-collision.
+SAFE_PULSE = {1: (350, 650), 2: (400, 660), 3: (475, 660)}   # base, shoulder, elbow
+SAFE_WRIST_US = (700, 2300)                                   # nozzle PWM (v2)
+SAFE_XYZ = {"x": (-130, 130), "y": (-230, -90), "z": (120, 260)}  # conservative box ~ORIGIN(0,-163,212)
+_limits_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "arms", "safe_limits.json")
+try:
+    if os.path.exists(_limits_path):
+        _j = json.load(open(_limits_path))
+        SAFE_PULSE = {int(k): tuple(v) for k, v in _j.get("servo_pulse", SAFE_PULSE).items()}
+        SAFE_WRIST_US = tuple(_j.get("wrist_us", SAFE_WRIST_US))
+        SAFE_XYZ = {k: tuple(v) for k, v in _j.get("xyz", SAFE_XYZ).items()}
+        log("safe limits loaded from %s" % _limits_path)
+except Exception as e:
+    log("safe_limits.json load failed (%s) — using built-in conservative defaults" % e)
+log("SAFE pulse=%s  xyz=%s" % (SAFE_PULSE, SAFE_XYZ))
+
+def clamp_pulse(servo, p):
+    lo, hi = SAFE_PULSE.get(servo, (0, 1000))
+    c = max(lo, min(hi, p))
+    if c != p: log("  CLAMP servo%d %d -> %d (safe %d..%d)" % (servo, p, c, lo, hi))
+    return c
+
+def clamp_axis(axis, v):
+    lo, hi = SAFE_XYZ.get(axis, (-9999, 9999))
+    c = max(lo, min(hi, v))
+    if c != v: log("  CLAMP %s %d -> %d (safe %d..%d)" % (axis, v, c, lo, hi))
+    return c
 
 ser = serial.Serial(DEV, BAUD, timeout=0.5)
 time.sleep(2.5)                      # ESP32 reboots when the port opens
@@ -50,15 +83,15 @@ def send(line):
 
 def handle(func, data):
     if func == 0x01 and len(data) == 8:          # SET_ANGLE
-        p1 = le16(data[0], data[1]); p2 = le16(data[2], data[3])
-        p3 = le16(data[4], data[5]); t  = le16(data[6], data[7])
+        p1 = clamp_pulse(1, le16(data[0], data[1])); p2 = clamp_pulse(2, le16(data[2], data[3]))
+        p3 = clamp_pulse(3, le16(data[4], data[5])); t  = le16(data[6], data[7])
         cmd = "arm.set_servo(1,%d,%d);arm.set_servo(2,%d,%d);arm.set_servo(3,%d,%d)" % (p1, t, p2, t, p3, t)
-        log("  SET_ANGLE p=(%d,%d,%d) t=%d" % (p1, p2, p3, t)); send(cmd)
+        log("  SET_ANGLE -> p=(%d,%d,%d) t=%d" % (p1, p2, p3, t)); send(cmd)
     elif func == 0x03 and len(data) == 8:        # SET_XYZ
-        x = le16(data[0], data[1]); y = le16(data[2], data[3])
-        z = le16(data[4], data[5]); t = le16(data[6], data[7])
+        x = clamp_axis("x", le16(data[0], data[1])); y = clamp_axis("y", le16(data[2], data[3]))
+        z = clamp_axis("z", le16(data[4], data[5])); t = le16(data[6], data[7])
         cmd = "arm.set_position((%d,%d,%d),%d)" % (x, y, z, t)
-        log("  SET_XYZ (%d,%d,%d) t=%d" % (x, y, z, t)); send(cmd)
+        log("  SET_XYZ -> (%d,%d,%d) t=%d" % (x, y, z, t)); send(cmd)
     elif func == 0x05:                            # SET_PWMSERVO (wrist)
         log("  SET_PWMSERVO %s -> skipped (v1)" % (data.hex(),))
     elif func == 0x07:                            # SET_SUCTION
