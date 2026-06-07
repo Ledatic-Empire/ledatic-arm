@@ -493,7 +493,10 @@ bridge_write_to_sink frame_str frame_hex desc =
   if mode == "off" then 0
   else if mode == "fifo" then
     let path = bridge_fifo_path_resolved 0
-    let _ = write_file path frame_str
+    -- Write HEX (+newline), not the raw binary string: char_from_int 0 yields an
+    -- EMPTY string in Rail, so binary frames silently drop every 0x00 byte
+    -- (any pulse < 256 corrupts). Hex is NUL-free; the relay hex-decodes it.
+    let _ = write_file path (join "" [frame_hex, char_from_int 10])
     let _ = bridge_record_status mode frame_hex desc
     1
   else if mode == "tcp" then

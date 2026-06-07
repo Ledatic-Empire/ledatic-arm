@@ -7,8 +7,11 @@ The ledatic-arm sim (armsim.rail) writes AA-55 framed bytes to the bridge FIFO
 the *factory MicroPython REPL* firmware @115200 (see memory
 maxarm-firmware-reconciliation-2026-06-07), which does NOT parse AA-55 — it
 wants Python text like `arm.set_position((x,y,z),dur)`. This relay sits between
-them: it parses each AA-55 frame off the FIFO and re-emits the equivalent REPL
-line over the serial port (held open at 115200, reopening the FIFO on EOF).
+them: it reads each hex-encoded AA-55 frame (one per line) off the FIFO and
+re-emits the equivalent REPL line over the serial port (held open at 115200,
+reopening the FIFO on EOF). Frames are hex, NOT raw binary, because Rail's
+char_from_int(0) yields an empty string -> raw binary drops every 0x00 byte
+(any pulse < 256 corrupts). armsim.rail writes hex; we decode it here.
 
 Translations (v1):
   0x01 SET_ANGLE  p1,p2,p3,t  -> arm.set_servo(1,p1,t);arm.set_servo(2,p2,t);arm.set_servo(3,p3,t)
@@ -99,30 +102,26 @@ def handle(func, data):
     else:
         log("  func=0x%02x len=%d -> skip" % (func, len(data)))
 
-buf = bytearray()
-while True:
+while True:                                       # each FIFO line = one hex-encoded AA-55 frame
     try:
-        with open(FIFO, "rb") as f:               # blocks until a writer opens
-            for chunk in iter(lambda: f.read(256), b""):
-                buf.extend(chunk)
-                while True:                       # drain all complete frames in buf
-                    i = buf.find(b"\xAA\x55")
-                    if i < 0:
-                        if len(buf) > 1: del buf[:-1]   # keep a trailing lone 0xAA
-                        break
-                    if i > 0: del buf[:i]
-                    if len(buf) < 5: break          # need AA 55 FUNC LEN ...
-                    func = buf[2]; length = buf[3]
-                    total = 4 + length + 1          # AA 55 FUNC LEN data[length] CHKSUM
-                    if len(buf) < total: break      # wait for the rest
-                    data = bytes(buf[4:4 + length])
-                    cks  = buf[4 + length]
-                    calc = (255 - ((func + length + sum(data)) % 256)) % 256
-                    if cks != calc:                 # mis-aligned / corrupt -> reject + resync
-                        log("  BAD CKSUM (got 0x%02x want 0x%02x func=0x%02x len=%d) -> drop+resync" % (cks, calc, func, length))
-                        del buf[:2]                 # drop this AA 55, hunt the next header
-                        continue
-                    del buf[:total]
-                    handle(func, data)
+        with open(FIFO, "r") as f:                # TEXT: hex digits only, no NUL bytes to drop
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    frame = bytes(int(h, 16) for h in line.split())
+                except ValueError:
+                    log("  bad hex line: %r" % line[:48]); continue
+                if len(frame) < 5 or frame[0] != 0xAA or frame[1] != 0x55:
+                    log("  not AA-55: %r" % line[:48]); continue
+                func = frame[2]; length = frame[3]
+                if len(frame) < 4 + length + 1:
+                    log("  short frame: %r" % line[:48]); continue
+                data = frame[4:4 + length]; cks = frame[4 + length]
+                calc = (255 - ((func + length + sum(data)) % 256)) % 256
+                if cks != calc:
+                    log("  BAD CKSUM (got 0x%02x want 0x%02x) -> drop" % (cks, calc)); continue
+                handle(func, data)
     except Exception as e:
         log("relay err: %s" % e); time.sleep(0.3)
