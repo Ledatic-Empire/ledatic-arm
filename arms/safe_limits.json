@@ -7,6 +7,8 @@
     "3": [490, 725]
   },
   "wrist_us": [600, 2400],
+  "_relax": "idle_relax_sec: unload the 3 bus servos (arm.teaching_mode) after this many seconds with no joint move, so they never HOLD torque long enough to overheat. The next move re-loads them. 0 disables. Set higher for fewer sag cycles during slow sequences, lower for cooler running.",
+  "idle_relax_sec": 10,
   "xyz": {
     "x": [-130, 130],
     "y": [-230, -90],

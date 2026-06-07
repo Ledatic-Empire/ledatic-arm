@@ -42,10 +42,12 @@ correct) lives in the operator's memory note `maxarm-firmware-reconciliation-202
   returns a value — but **nothing moves**, because the servos have no power.
 - Confirm power from the REPL: `arm.bus_servo.get_vin(1)` → ~`12000` mV means on,
   ~`0`/`None` means off.
-- The servos **hold torque** after any move and there is **no software relax wired
-  to the viewer** yet — they heat up if left holding a loaded pose. **Power down
-  when done**, or relax in software: `arm.teaching_mode()` (limps all 3 bus servos;
-  the arm will sag, so support it).
+- The servos **hold torque** while loaded and heat up if left holding a static
+  loaded pose — this is the thing that damages them. The relay now **auto-relaxes**
+  them after `idle_relax_sec` (default 10s) of no movement (see §10), so they don't
+  cook during long/unattended runs. To relax immediately: `arm.teaching_mode()`
+  (limps all 3 bus servos; the arm sags, so support it). **Power down** to fully
+  de-energize.
 
 ## 3. Architecture — how the viewer drives the real arm
 
@@ -150,3 +152,27 @@ nozzle.pump_f / pump_b / valve_f / valve_b   # pump + valve H-bridge primitives
 | relay log shows garbage pulses (e.g. -2822) | running an old relay without the hex/checksum fix — rebuild + restart |
 | `BAD CKSUM` in relay log | corrupt/mis-aligned frame, correctly rejected |
 | `CLAMP servoN ... -> ...` in relay log | a command exceeded the safe range and was bounded (working as intended) |
+
+## 10. Long-term / unattended operation — auto-relax
+
+The big HTS-35H bus servos (1-3) overheat if they HOLD a loaded pose. The relay
+runs a watchdog that unloads them after `idle_relax_sec` (in `arms/safe_limits.json`,
+default **10s**) with no joint move, and re-loads them automatically on the next
+move. Net effect: the arm holds torque only while moving / briefly after, and rests
+limp between movements — safe to leave running for hours.
+
+- Verified live 2026-06-07: move → `AUTO-RELAX (idle >10s) -> teaching_mode` →
+  next move → `LOAD (re-engage from relaxed)`.
+- The arm **sags** when it auto-relaxes (servos go limp). By design — don't expect it
+  to hold a high/loaded pose between commands.
+- Tuning: raise `idle_relax_sec` for fewer sag cycles in slow sequences; lower it for
+  cooler running; set `0` to disable (then YOU must relax or power down).
+- The PWM wrist + vacuum pump are NOT auto-relaxed (small servo, no torque-hold heat;
+  the pump stays as commanded so it won't drop a held part).
+- The `com.ledatic.armbridge` keepalive keeps the bridge (with auto-relax) running
+  across Mac sleep, so unattended operation survives a nap.
+
+**Saved operating profile** — everything needed to run it safely is persisted in the
+repo: **controls** (§3, §7), **limits** (§6 + `arms/safe_limits.json`), and the
+**relax policy** (this section + `idle_relax_sec`). The arm comes up safe-to-run on a
+plain `tools/enable_bridge.sh repl`.
