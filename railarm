@@ -1,0 +1,60 @@
+#!/usr/bin/env bash
+# railarm -- ledatic-arm real-arm control + status (smart default = status).
+#   ./railarm [status|up|down|open|home|estop|clear|relax|logs]
+# Pairs with the /railarm skill. Firmware = factory MicroPython REPL @115200
+# (NOT AA-55); see docs/REAL_ARM_OPERATION.md.
+REPO="$(cd "$(dirname "$0")" && pwd)"
+DEV="${ARMBRIDGE_DEV:-/dev/cu.usbserial-210}"
+PORT="${ARMSIM_PORT:-7071}"
+BASE="http://localhost:$PORT"
+cmd="${1:-status}"
+api() { curl -s --max-time 6 "$BASE$1" 2>/dev/null; }
+
+status() {
+  echo "ledatic-arm — $(date '+%Y-%m-%d %H:%M')   (firmware: MicroPython REPL @115200)"
+  [ -e "$DEV" ] && echo "  arm device : present ($DEV)" || echo "  arm device : ABSENT — powered off / unplugged / charge-only cable"
+  if pgrep -f repl_relay.py >/dev/null 2>&1; then echo "  relay      : alive (repl — drives the REAL arm)"
+  elif pgrep -f armsim_bridge_relay.py >/dev/null 2>&1; then echo "  relay      : alive (usb/AA-55 — SIM ONLY, does NOT drive this firmware)"
+  else echo "  relay      : DOWN  ->  ./railarm up"; fi
+  if api /state >/dev/null && [ -n "$(api /state)" ]; then echo "  server     : up on :$PORT"; else echo "  server     : DOWN"; fi
+  mode=$(grep '^ARMSIM_BRIDGE=' "$REPO/.bridge.env" 2>/dev/null | cut -d= -f2)
+  kind=$(grep '^ARMSIM_BRIDGE_KIND=' "$REPO/.bridge.env" 2>/dev/null | cut -d= -f2)
+  echo "  bridge     : ${mode:-off}${kind:+ ($kind)}"
+  api /state | python3 -c "import sys,json
+try:
+  d=json.load(sys.stdin); print('  estop      :', 'ENGAGED (POST /clear)' if d.get('estop') else 'clear', '  pulses', d.get('pulses'))
+except: print('  estop      : (state unreadable)')" 2>/dev/null
+  launchctl list 2>/dev/null | grep -q com.ledatic.armbridge && echo "  keepalive  : loaded (survives sleep)" || echo "  keepalive  : not loaded"
+  python3 -c "import json;d=json.load(open('$REPO/arms/safe_limits.json'));print('  limits     : base',d['servo_pulse']['1'],'shoulder',d['servo_pulse']['2'],'elbow',d['servo_pulse']['3'],'wrist',d['wrist_us'],'us  auto-relax',str(d.get('idle_relax_sec'))+'s idle')" 2>/dev/null
+  br=$(git -C "$REPO" rev-parse --abbrev-ref HEAD 2>/dev/null)
+  dirty=$(git -C "$REPO" status --short 2>/dev/null | wc -l | tr -d ' ')
+  unpushed=$(git -C "$REPO" log --oneline @{u}.. 2>/dev/null | wc -l | tr -d ' ')
+  echo "  repo       : $br — $dirty dirty, $unpushed unpushed"
+  git -C "$REPO" log --oneline -1 2>/dev/null | sed 's/^/  last commit: /'
+  echo "  viewer     : $BASE/   (operator console: safe-range sliders, STOP=e-stop, commit-on-release)"
+}
+
+case "$cmd" in
+  status|"") status ;;
+  up)    cd "$REPO" && tools/enable_bridge.sh repl "$DEV" ;;
+  down)  cd "$REPO" && tools/enable_bridge.sh off ;;
+  open)  open "$BASE/" ;;
+  home)  api "/poses/load?name=home" >/dev/null && echo "sent home" ;;
+  estop) api /estop  >/dev/null && echo "E-STOP engaged (halt + drop suction + lock). release: ./railarm clear" ;;
+  clear) api /clear  >/dev/null && echo "e-stop cleared" ;;
+  relax) # immediate software relax: take the port, teaching_mode, leave bridge down
+    launchctl bootout "gui/$(id -u)/com.ledatic.armbridge" 2>/dev/null
+    pkill -f repl_relay.py 2>/dev/null; sleep 1
+    python3 - "$DEV" <<'PY'
+import sys,time,serial
+s=serial.Serial(); s.port=sys.argv[1]; s.baudrate=115200; s.timeout=0.4; s.dtr=False; s.rts=False
+for _ in range(12):
+    try: s.open(); break
+    except: time.sleep(0.5)
+time.sleep(0.6); s.reset_input_buffer(); s.write(b"\r\narm.teaching_mode()\r\n"); s.flush(); time.sleep(1.0); s.close()
+print("relaxed (servos unloaded). bridge down; ./railarm up to drive again")
+PY
+    ;;
+  logs)  tail -"${2:-30}" /tmp/armsim_bridge_relay.log 2>/dev/null ;;
+  *) echo "usage: ./railarm [status|up|down|open|home|estop|clear|relax|logs]" ;;
+esac
