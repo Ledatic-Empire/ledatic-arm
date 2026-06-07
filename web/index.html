@@ -2007,7 +2007,7 @@ function computeMotionPulses() {
   let elapsed = Date.now() - Number(m.t_start_ms);
   // guard against a skewed/invalid server clock — keep interpolation sane
   if (!Number.isFinite(elapsed) || elapsed < 0) elapsed = 0;
-  if (dur <= 0 || elapsed >= dur) return to.slice();
+  if (dur <= 0 || elapsed >= dur) return null;   // move complete -> no active motion (clears motionActive)
   let t = elapsed / dur;
   if (t < 0) t = 0; else if (t > 1) t = 1;
   t = t * t * (3 - 2 * t);
@@ -2635,8 +2635,9 @@ function updateSliders(s) {
     if (pendingDrag && pendingDrag.key === j.key) continue;
     const inp = document.getElementById("slider-" + j.key);
     if (!inp) continue;
-    // disable sliders while a motion is in flight (avoids fighting the arm)
-    inp.disabled = motionActive;
+    // Sliders stay usable even mid-motion: commit-on-release + the pendingDrag
+    // skip below prevent fighting the arm, so never disable input here.
+    inp.disabled = false;
     let val = (j.key === "p4_us") ? s.pulses[3] : s.pulses[j.id - 1];
     if (val == null) continue;
     val = Math.round(val);
