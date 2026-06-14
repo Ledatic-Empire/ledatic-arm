@@ -1686,6 +1686,11 @@ const POLL_MS    = 200;
 const ACTUAL_POLL_MS = 500;
 const CHAIN_RENDER_MAX = 15;
 const GHOST_THRESHOLD_MM = 2.0;
+// Only trust an /actual divergence once motion has settled. The arm legitimately
+// trails the commanded pose during a move (the 0.5s poll catches it mid-trajectory),
+// so without this gate the ghost flickers on every move. Flag PERSISTENT divergence
+// only -- the kind that means something is actually wrong (e.g. a stuck joint).
+const GHOST_SETTLE_MS = 1200;
 const TRAIL_MAX  = 30;
 const SCENE_BG   = "#0a0e0f";
 const COL_GRID   = "#172123";
@@ -1758,6 +1763,7 @@ let actualDiffers = false;
 
 // Motion plan (server-provided eased interpolation)
 let motionActive = false;
+let motionEndedAt = 0;         // Date.now() when the last move completed (ghost settle gate)
 
 // E-stop latch mirror
 let estopActive = false;
@@ -2253,6 +2259,7 @@ function frame() {
     }
   } else if (motionActive) {
     motionActive = false;
+    motionEndedAt = Date.now();   // start the ghost settle timer
     tipHud.classList.remove("live");
     $("#motion-arrow").classList.remove("show");
     $("#slider-section").classList.remove("moving");
@@ -3237,7 +3244,10 @@ async function fetchActual() {
     const res = await fetch("/actual", { cache: "no-store" });
     if (!res.ok) throw new Error("HTTP " + res.status);
     actualState = await res.json();
-    actualDiffers = computeActualDiffers(state, actualState);
+    // Gate on motion-settled: the arm trails the command during a move (the poll
+    // samples mid-trajectory), so only flag divergence that PERSISTS after it stops.
+    const settled = !motionActive && (Date.now() - motionEndedAt) >= GHOST_SETTLE_MS;
+    actualDiffers = settled && computeActualDiffers(state, actualState);
   } catch (e) {
     actualState = null;
     actualDiffers = false;
