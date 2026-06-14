@@ -1,12 +1,27 @@
-# wave.txt -- friendly wave gesture.
-# RE-AUTHORED 2026-06-14: original swung the (newly-live) base ~120deg
-# (250<->750) with the arm extended. Now a gentle base wave from a compact,
-# elevated pose: small swept radius, modest swing, slower. ends home.
+# wave.txt -- friendly FAST wave (re-authored 2026-06-14).
+# Energy from fast nozzle sweeps + suction, tip stays high (shoulder<=500,
+# elbow<=560). A small quick base wiggle adds life without dipping/extending.
 # format: p1 p2 p3 p4_us time_ms wait_ms suction
-500 500 520 1500  800 200 off
-420 500 520 1600 1000 150 -
-580 500 520 1600 1000 150 -
-420 500 520 1600 1000 150 -
-580 500 520 1600 1000 150 -
-500 500 520 1500 1000 150 -
-500 500 500 1500 1000   0 off
+500 500 540 1500  300  60 off
+
+# raise to a friendly compact "hello" pose
+500 480 560 1500  300  60 -
+
+# fast nozzle wave side-to-side (the wave) + suction greeting
+500 480 560 2300  180  30 on
+500 480 560  700  180  30 -
+500 480 560 2300  170  30 -
+500 480 560  700  170  30 off
+500 480 560 2300  170  30 -
+500 480 560  700  170  40 -
+
+# small quick base wiggle (high/compact) while waving the nozzle
+450 480 560 2000  300  40 on
+550 480 560 1000  300  40 -
+450 480 560 2000  300  40 -
+550 480 560 1000  300  50 off
+
+# big friendly nozzle finish + home
+500 490 560 2300  200  60 on
+500 490 560  700  200  60 off
+500 500 500 1500  300   0 off
