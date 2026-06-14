@@ -12,7 +12,7 @@ Hex, not raw binary, because Rail's char_from_int(0) yields "" -> raw binary
 drops every 0x00 byte (any pulse < 256 corrupts).
 
 Translations:
-  0x01 SET_ANGLE  p1,p2,p3,t  -> arm.set_servo(1..3,p,t)   (loads servos if relaxed)
+  0x01 SET_ANGLE  p1,p2,p3,t  -> arm.bus_servo.run(1..3,p,t) (loads servos if relaxed)
   0x03 SET_XYZ    x,y,z,t     -> arm.set_position((x,y,z),t)
   0x05 SET_PWMSERVO us,t      -> nozzle.set_angle(deg,t)     (wrist, us->deg clamped)
   0x07 SET_SUCTION cmd        -> nozzle.on() / nozzle.off()  (vacuum pump suck/vent)
@@ -171,7 +171,12 @@ def handle(func, data):
         p1 = clamp_pulse(1, le16(data[0], data[1])); p2 = clamp_pulse(2, le16(data[2], data[3]))
         p3 = clamp_pulse(3, le16(data[4], data[5])); t  = le16(data[6], data[7])
         log("  SET_ANGLE -> p=(%d,%d,%d) t=%d" % (p1, p2, p3, t))
-        joint_move("arm.set_servo(1,%d,%d);arm.set_servo(2,%d,%d);arm.set_servo(3,%d,%d)" % (p1, t, p2, t, p3, t))
+        # bus_servo.run, NOT set_servo: on this unit arm.set_servo(1,...) is broken
+        # for the base -- it ignores the pulse and parks servo 1 at ~691 (verified
+        # live 2026-06-14). run() drives all three correctly. The relay's own clamp
+        # (safe_limits.json) keeps pulses inside the firmware soft-limits, so we lose
+        # nothing by skipping set_servo's clamping.
+        joint_move("arm.bus_servo.run(1,%d,%d);arm.bus_servo.run(2,%d,%d);arm.bus_servo.run(3,%d,%d)" % (p1, t, p2, t, p3, t))
     elif func == 0x03 and len(data) == 8:        # SET_XYZ
         x = clamp_axis("x", le16(data[0], data[1])); y = clamp_axis("y", le16(data[2], data[3]))
         z = clamp_axis("z", le16(data[4], data[5])); t = le16(data[6], data[7])
