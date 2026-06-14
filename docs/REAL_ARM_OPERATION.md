@@ -40,8 +40,19 @@ correct) lives in the operator's memory note `maxarm-firmware-reconciliation-202
 - The single most confusing failure mode: **servo power off, ESP32 on.** Plugged
   into USB, the REPL answers every command with `(ok)` and `arm.read_position()`
   returns a value — but **nothing moves**, because the servos have no power.
-- Confirm power from the REPL: `arm.bus_servo.get_vin(1)` → ~`12000` mV means on,
-  ~`0`/`None` means off.
+- Confirm power from the REPL: `arm.bus_servo.get_vin(1)` reads the servo rail in mV.
+  There are **three** states, not two:
+  - **~`12000` mV** → rail up, servos will move. Good.
+  - **`False` / `None` / ~`0`** → servos don't answer the bus at all — fully unpowered.
+  - **~`3900` mV** → the trap: this is the board running on **USB power alone** (12V
+    barrel jack not seated / switch off / wrong brick). Servos talk on the bus and
+    report `get_position`, but ~3.9 V is far below the ~7–12 V the HTS-35H needs for
+    torque, so commanded moves are *accepted* (`run()` returns `None`) and nothing
+    physically moves. **A half-seated barrel jack lands you here** (confirmed live
+    2026-06-14). Push the barrel in until it clicks; the rail jumps to ~12000 mV.
+  - **Decisive motion test** (voltage-independent): read `get_position(1)`, send
+    `arm.bus_servo.run(1, <pos+100>, 700)`, wait ~1s, read `get_position(1)` again.
+    A position *delta* = the servo physically moved; no delta = under-volted/stalled.
 - The servos **hold torque** while loaded and heat up if left holding a static
   loaded pose — this is the thing that damages them. The relay now **auto-relaxes**
   them after `idle_relax_sec` (default 10s) of no movement (see §10), so they don't
@@ -153,6 +164,7 @@ nozzle.pump_f / pump_b / valve_f / valve_b   # pump + valve H-bridge primitives
 |---|---|
 | arm not on `/dev/cu.*` at all | ESP32 unpowered, or a **charge-only USB-C cable** (no data lines) |
 | REPL says `(ok)` but nothing moves | **12V servo rail off** — check `get_vin`; flip the power |
+| `get_vin` reads ~`3900` mV, servos report position but won't move | **barrel jack not fully seated** (or switch off / wrong brick) — board's on USB power only. Reseat the barrel until it clicks → ~`12000` mV |
 | relay log shows garbage pulses (e.g. -2822) | running an old relay without the hex/checksum fix — rebuild + restart |
 | `BAD CKSUM` in relay log | corrupt/mis-aligned frame, correctly rejected |
 | `CLAMP servoN ... -> ...` in relay log | a command exceeded the safe range and was bounded (working as intended) |
