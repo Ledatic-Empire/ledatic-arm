@@ -1,44 +1,41 @@
-# dance.txt -- FAST + collision-safe (re-authored 2026-06-14).
-# Same safe poses as the validated set (shoulder <=560, elbow <=640 -> tip stays
-# >=136mm above the table), just much snappier timing: 160-250ms moves, tight
-# waits, frantic elbow bounces + nozzle flicks + lots of suction pops. The energy
-# is in SPEED, not in dipping/extending low (which is what hit the table before).
-# Base swings stay -- the base is mechanically slow, so they read as gentle.
+# dance.txt -- FULL AMPLITUDE at the servos' MAX SPEED (re-authored 2026-06-14).
+# Measured live: each joint completes a full dance-sized move in ~0.36s at max
+# speed, and bus_servo.run HONORS the duration. So commanding 160ms (< the 0.36s
+# the servo needs) made it ABORT mid-move and the amplitude COLLAPSED to a weak
+# jitter -- that was the "slow/underwhelming" feel. Commanding ~360ms lets every
+# move COMPLETE at max speed = big, crisp, full-throw bounces. It also makes the
+# sim match reality (sim eases over the same time_ms). Same safe poses (tip>=136mm).
 # fields: p1 p2 p3 p4_us time_ms wait_ms suction
-500 500 500 1500  250  60 off
+500 500 500 1500  320  60 off
 
-# snappy double nod + suction pops
-500 560 560 1500  200  40 on
-500 470 540 1500  200  40 off
-500 560 560 1500  180  40 on
-500 470 540 1500  180  50 off
+# crisp double nod + suction pops
+500 560 560 1500  300  60 on
+500 470 540 1500  300  60 off
+500 560 560 1500  300  60 on
+500 470 540 1500  300  80 off
 
-# FRANTIC elbow bounces (510<->640) at shoulder 500, suction flicker
-500 500 640 1500  180  30 on
-500 500 510 1500  180  30 off
-500 500 640 1500  170  30 on
-500 500 510 1500  170  30 off
-500 500 640 1500  170  30 on
-500 500 510 1500  170  30 off
-500 500 640 1500  160  30 on
-500 500 520 1500  200  50 off
+# FULL elbow bounces (510<->640) at max speed -- big crisp throws
+500 500 640 1500  360  70 on
+500 500 510 1500  360  70 off
+500 500 640 1500  360  70 on
+500 500 510 1500  360  70 off
+500 500 640 1500  360  70 on
+500 500 520 1500  340  90 off
 
-# base swings (base is slow) + nozzle flicks + suction
-400 500 560 2200  400  40 on
-600 500 560  800  400  40 off
-400 510 560 2200  400  40 on
-600 510 560  800  400  50 off
-500 500 560 1500  300  50 -
+# base swings at full speed (200p -> ~0.37s) + nozzle + suction
+400 500 560 2200  380  70 on
+600 500 560  800  380  70 off
+400 510 560 2200  380  70 on
+600 510 560  800  380  90 off
+500 500 560 1500  340  80 -
 
-# rapid nozzle twirl + suction blinks (stationary, tip high)
-500 520 620 2300  170  30 on
-500 520 620  700  170  30 off
-500 520 620 2300  170  30 on
-500 520 620  700  170  30 off
-500 520 620 2300  160  40 on
-500 520 620  700  160  50 off
+# nozzle twirl + suction blinks (stationary, tip high)
+500 520 620 2300  260  60 on
+500 520 620  700  260  60 off
+500 520 620 2300  260  60 on
+500 520 620  700  260  80 off
 
-# quick forward jab (elbow 640) + snap home
-500 500 640 1500  220  60 on
-500 540 520 1500  200  80 off
-500 500 500 1500  300   0 off
+# full forward jab (elbow 640) + snap home
+500 500 640 1500  360  90 on
+500 540 520 1500  320  90 off
+500 500 500 1500  360   0 off
