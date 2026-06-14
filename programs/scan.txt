@@ -1,6 +1,10 @@
-# scan.txt -- horizontal sweep, like searching the workspace
-500 550 700 1500  800 100 off
-200 550 700 1500 1200  50 -
-800 550 700 1500 2000  50 -
-500 550 700 1500 1000   0 off
-500 500 500 1500  800   0 -
+# scan.txt -- horizontal sweep, like searching the workspace.
+# RE-AUTHORED 2026-06-14: original swept the (newly-live) base ~144deg
+# (200<->800). Now a slow, modest sweep from a compact, elevated pose
+# (small swept radius). ends home.
+# format: p1 p2 p3 p4_us time_ms wait_ms suction
+500 500 540 1500  800 200 off
+350 500 540 1500 1700 200 -
+650 500 540 1500 2100 200 -
+500 500 540 1500 1500 200 -
+500 500 500 1500  800   0 off

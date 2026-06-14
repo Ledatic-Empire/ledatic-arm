@@ -1,10 +1,12 @@
-# wave.txt -- friendly wave gesture
-# raise arm, swing base back and forth, return home
+# wave.txt -- friendly wave gesture.
+# RE-AUTHORED 2026-06-14: original swung the (newly-live) base ~120deg
+# (250<->750) with the arm extended. Now a gentle base wave from a compact,
+# elevated pose: small swept radius, modest swing, slower. ends home.
 # format: p1 p2 p3 p4_us time_ms wait_ms suction
-500 600 750 1500  800 100 off
-250 600 750 1500  600  50 -
-750 600 750 1500  600  50 -
-250 600 750 1500  600  50 -
-750 600 750 1500  600  50 -
-500 600 750 1500  600  50 -
+500 500 520 1500  800 200 off
+420 500 520 1600 1000 150 -
+580 500 520 1600 1000 150 -
+420 500 520 1600 1000 150 -
+580 500 520 1600 1000 150 -
+500 500 520 1500 1000 150 -
 500 500 500 1500 1000   0 off

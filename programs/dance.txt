@@ -1,32 +1,28 @@
-# dance.txt -- expressive routine combining base sweep, shoulder dip,
-# elbow flex, nozzle twist, and suction blinks.
-# total ~14 seconds. ends at home.
-500 500 500 1500  500 100 off
+# dance.txt -- gentle expressive routine.
+# RE-AUTHORED 2026-06-14: the original whipped the (newly-live, post base-fix)
+# base ~96deg with the arm EXTENDED, driving it into the table/itself (operator
+# cut power). New rule: turn the base ONLY from a compact, elevated pose (small
+# swept radius), modest swings, slow, tip stays well above the table. Ends home.
+# fields: p1 p2 p3 p4_us time_ms wait_ms suction
+500 500 500 1500  800 200 off
 
-# strike a high pose
-500 620 600 1500  500 100 -
-500 620 600 1500  500 100 on
+# gentle nod (no base) -- greet
+500 560 560 1500  700 150 -
+500 480 540 1500  700 150 on
+500 520 520 1500  600 200 -
 
-# circle 1: base + elbow
-300 620 600 2000  600  50 -
-300 580 750 2000  500  50 -
-700 580 750 1000  600  50 -
-700 620 600 1000  500  50 -
-500 620 600 1500  400  50 off
+# compact + elevated, then slow modest base turns (small radius = safe)
+500 500 520 1500  600 200 -
+380 500 520 1700 1300 200 -
+620 500 520 1700 1300 200 -
+500 500 520 1500 1100 200 -
 
-# elbow bounce
-500 620 480 1500  300  50 -
-500 620 700 1500  300  50 -
-500 620 480 1500  300  50 -
-500 620 700 1500  300  50 -
-500 620 600 1500  300  50 -
+# slow nozzle wave while gently turning base (still compact)
+430 500 540 2100 1100 150 on
+570 500 540  900 1100 150 -
+430 500 540 2100 1100 150 off
+500 500 520 1500  900 200 -
 
-# wave nozzle while turning base
-300 600 700 2300  500  50 on
-700 600 700 700   500  50 -
-300 600 700 2300  500  50 off
-700 600 700 700   500  50 -
-
-# big bow + recover
-500 670 480 1500  800 100 -
+# one slow controlled forward reach (NO base turn while extended) + recover
+500 520 640 1500 1100 250 -
 500 500 500 1500 1200   0 off
