@@ -70,7 +70,7 @@ browser viewer ──HTTP──> armsim.rail (Rail sim, computes FK/poses)
                               │
                    tools/repl_relay.py  ── parses hex, checksum-validates,
                               │            CLAMPS to safe ranges, translates:
-                              │              SET_ANGLE    -> arm.set_servo(1..3,p,t)
+                              │              SET_ANGLE    -> arm.bus_servo.run(1..3,p,t)
                               │              SET_XYZ      -> arm.set_position((x,y,z),t)
                               │              SET_PWMSERVO -> nozzle.set_angle(deg,t)  (wrist)
                               │              SET_SUCTION  -> nozzle.on()/off()        (vacuum pump)
@@ -141,6 +141,10 @@ re-run `tools/arm_limits.py` (adjust the `CAPS`) **with a human watching**, sinc
 ```
 arm.set_position((x,y,z), dur)   arm.set_position_with_speed   arm.set_position_relatively
 arm.set_servo(id, pulse, dur)    arm.set_servo_with_speed      arm.set_servo_relatively
+  ⚠ arm.set_servo(1,...) is BROKEN on this unit — it ignores the pulse and
+    parks the base (servo 1) at ~691. Works fine for servos 2/3. Drive joints
+    with arm.bus_servo.run(id,pulse,dur) instead (correct for all 3). The relay
+    does this. Verified live 2026-06-14; see git 998498e.
 arm.set_joint(id, angle, dur)    arm.go_home()                 arm.teaching_mode()   # relax all 3
 arm.read_position() -> (x,y,z)   arm.verify_position           arm.ORIGIN = (0,-163,212)
 arm.bus_servo.run(id, pulse, dur)   .load(id) / .unload(id)    .get_position(id)
