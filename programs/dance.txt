@@ -1,40 +1,44 @@
-# dance.txt -- ENERGETIC + collision-safe (re-authored 2026-06-14).
-# The original whipped the base while the shoulder was DIPPED + EXTENDED
-# (580-670), driving the arm into the table (operator cut power). The fix is NOT
-# to slow everything down -- it's to keep the TIP HIGH: the shoulder never goes
-# past ~560, so fast elbow bounces / nozzle twirls / suction pops are all safe
-# (tip stays well above the table, sim-validated). Snappy and fun. Ends home.
+# dance.txt -- FAST + collision-safe (re-authored 2026-06-14).
+# Same safe poses as the validated set (shoulder <=560, elbow <=640 -> tip stays
+# >=136mm above the table), just much snappier timing: 160-250ms moves, tight
+# waits, frantic elbow bounces + nozzle flicks + lots of suction pops. The energy
+# is in SPEED, not in dipping/extending low (which is what hit the table before).
+# Base swings stay -- the base is mechanically slow, so they read as gentle.
 # fields: p1 p2 p3 p4_us time_ms wait_ms suction
-500 500 500 1500  300  80 off
+500 500 500 1500  250  60 off
 
-# snappy double nod + suction pop
-500 560 560 1500  300  60 on
-500 470 540 1500  300  60 off
-500 560 560 1500  300  60 on
-500 470 540 1500  300  80 off
+# snappy double nod + suction pops
+500 560 560 1500  200  40 on
+500 470 540 1500  200  40 off
+500 560 560 1500  180  40 on
+500 470 540 1500  180  50 off
 
-# FAST elbow bounces at shoulder 500 (reach-front config -> tip stays high = safe)
-500 500 640 1500  300  50 on
-500 500 510 1500  300  50 off
-500 500 640 1500  280  50 on
-500 500 510 1500  280  50 off
-500 500 640 1500  280  50 on
-500 500 520 1500  300  80 off
+# FRANTIC elbow bounces (510<->640) at shoulder 500, suction flicker
+500 500 640 1500  180  30 on
+500 500 510 1500  180  30 off
+500 500 640 1500  170  30 on
+500 500 510 1500  170  30 off
+500 500 640 1500  170  30 on
+500 500 510 1500  170  30 off
+500 500 640 1500  160  30 on
+500 500 520 1500  200  50 off
 
-# energetic base swings (shoulder HIGH = safe) with nozzle flicks + suction
-400 500 560 2200  450  50 on
-600 500 560  800  450  50 off
-400 510 560 2200  450  50 on
-600 510 560  800  450  50 off
-500 500 560 1500  400  80 -
+# base swings (base is slow) + nozzle flicks + suction
+400 500 560 2200  400  40 on
+600 500 560  800  400  40 off
+400 510 560 2200  400  40 on
+600 510 560  800  400  50 off
+500 500 560 1500  300  50 -
 
 # rapid nozzle twirl + suction blinks (stationary, tip high)
-500 520 640 2300  280  50 on
-500 520 640  700  280  50 off
-500 520 640 2300  280  50 on
-500 520 640  700  280  80 off
+500 520 620 2300  170  30 on
+500 520 620  700  170  30 off
+500 520 620 2300  170  30 on
+500 520 620  700  170  30 off
+500 520 620 2300  160  40 on
+500 520 620  700  160  50 off
 
-# quick forward reach (elbow 640 -> tip stays safe) + snap home
-500 500 640 1500  350 100 on
-500 540 520 1500  300 100 off
-500 500 500 1500  400   0 off
+# quick forward jab (elbow 640) + snap home
+500 500 640 1500  220  60 on
+500 540 520 1500  200  80 off
+500 500 500 1500  300   0 off
