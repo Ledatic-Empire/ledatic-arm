@@ -28,11 +28,21 @@ are not bus servos and are left as commanded.
 
 Usage:  repl_relay.py <serial_dev> <baud=115200> <fifo>
 """
-import os, sys, time, json, threading, serial
+import os, re, sys, time, json, threading, serial
 
 DEV  = sys.argv[1]
 BAUD = int(sys.argv[2]) if len(sys.argv) > 2 else 115200
 FIFO = sys.argv[3]
+
+# ── real-pose readback (feeds the viewer's /actual ghost arm) ──
+# The relay is the only process holding the serial port, so it is the only
+# thing that can read the arm back. A poll thread publishes the live servo
+# pulses here; armsim.rail's /actual route (fifo mode) reads this file and
+# runs the SAME FK as /state, so the ghost reflects the arm's true pose.
+REAL_PATH = "/tmp/armsim_real.txt"
+REAL_TMP  = "/tmp/armsim_real.tmp"
+POLL_SEC  = 0.5                       # matches the viewer's ACTUAL_POLL_MS
+_INT3 = re.compile(r"^(-?\d+)\s+(-?\d+)\s+(-?\d+)$")
 
 def log(m):
     sys.stderr.write(m + "\n"); sys.stderr.flush()
@@ -73,6 +83,8 @@ time.sleep(2.5)                      # ESP32 reboots when the port opens
 ser.reset_input_buffer()
 ser.write(b"\r\n"); ser.flush(); time.sleep(0.3); ser.reset_input_buffer()
 log("repl-relay: %s @%d, FIFO=%s (AA-55 -> REPL)" % (DEV, BAUD, FIFO))
+try: os.remove(REAL_PATH)             # clear any stale ghost from a prior run
+except OSError: pass
 
 def le16(lo, hi):
     v = lo | (hi << 8)
@@ -106,6 +118,41 @@ def aux_send(line):                  # wrist / suction: no load, but keep the ar
     with _lock:
         _send(line); _last_move = time.time()
 
+def _publish_real(p1, p2, p3):       # atomic write so the rail handler never reads a torn file
+    try:
+        with open(REAL_TMP, "w") as fh:
+            fh.write("%d %d %d" % (p1, p2, p3))   # no trailing newline -> clean parse_int
+        os.replace(REAL_TMP, REAL_PATH)
+    except Exception as e:
+        log("  real-publish err: %s" % e)
+
+def pose_poll():
+    # Read the live servo positions and publish them for /actual (the ghost arm).
+    # READ-ONLY: never touches _last_move, so the relax watchdog still fires; when
+    # the arm is relaxed, get_position reports the SAGGED pose, so the ghost shows
+    # the real droop. One combined query = one REPL round trip; the lock is free
+    # during the POLL_SEC sleep so user moves take priority.
+    if POLL_SEC <= 0: return
+    time.sleep(3.0)                  # let the ESP32 finish booting before first query
+    q = ("print(arm.bus_servo.get_position(1),"
+         "arm.bus_servo.get_position(2),"
+         "arm.bus_servo.get_position(3))")
+    while True:
+        time.sleep(POLL_SEC)
+        try:
+            with _lock:
+                buf = _send(q)
+            for ln in buf.decode("utf-8", "replace").replace("\r", "").split("\n"):
+                ln = ln.strip()
+                if not ln or "get_position" in ln or ln.startswith(">>>"):
+                    continue          # skip the echoed command + prompt
+                m = _INT3.match(ln)   # the only bare "<int> <int> <int>" line is the output
+                if m:
+                    _publish_real(int(m.group(1)), int(m.group(2)), int(m.group(3)))
+                    break             # a non-int reading (e.g. False) -> skip, keep last good
+        except Exception as e:
+            log("  pose-poll err: %s" % e); time.sleep(0.5)
+
 def relax_watchdog():
     global _loaded
     if IDLE_RELAX_SEC <= 0: return
@@ -117,6 +164,7 @@ def relax_watchdog():
                 log("  AUTO-RELAX (idle >%ss) -> teaching_mode (servos unloaded)" % IDLE_RELAX_SEC)
 
 threading.Thread(target=relax_watchdog, daemon=True).start()
+threading.Thread(target=pose_poll, daemon=True).start()
 
 def handle(func, data):
     if func == 0x01 and len(data) == 8:          # SET_ANGLE

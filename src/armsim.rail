@@ -1037,16 +1037,16 @@ route_clear _ =
   http_response 200 "OK" "application/json"
     (state_json cp1 cp2 cp3 cp4 csu 1)
 
--- /actual -- when bridge=tcp, send AA 55 READ_ANGLE to the real arm
--- via tools/read_arm_pose.sh and return the arm's reported pulses
--- (FK computed from those, not from /state). When bridge=fifo or off,
--- returns /state verbatim (no readback path in those modes today).
---
--- The viewer's ghost-arm rendering compares /actual to /state and
--- draws the dashed ghost when they diverge by >2mm. In sim or fifo
--- mode they're identical, so the ghost stays invisible.
+-- /actual -- return the arm's TRUE pose so the viewer can draw the ghost.
+--   tcp  mode: send AA 55 READ_ANGLE via tools/read_arm_pose.sh.
+--   fifo mode: read the live pulses tools/repl_relay.py polls + publishes to
+--              real_pose_path (the REPL readback path).
+--   off  mode: no real arm -> return /state verbatim (ghost stays hidden).
+-- In every case FK is computed from the returned pulses by the SAME state_json
+-- as /state, so the viewer's >2mm divergence check compares like with like.
 
 read_arm_pose_path = "/Users/ledaticempire/projects/ledatic-arm/tools/read_arm_pose.sh"
+real_pose_path     = "/tmp/armsim_real.txt"
 
 route_actual_tcp _ =
   let host = bridge_tcp_host_resolved 0
@@ -1066,9 +1066,28 @@ route_actual_tcp _ =
       let ap3 = parse_int_signed (head (tail (tail parts)))
       http_response 200 "OK" "application/json" (state_json ap1 ap2 ap3 cp4 csu 1)
 
+-- fifo/repl readback: relay publishes live servo pulses to real_pose_path.
+-- Run the SAME FK as /state on them; wrist + suction stay commanded (cp4/csu),
+-- mirroring route_actual_tcp. Empty/short file -> fall back to commanded state.
+route_actual_fifo _ =
+  let result = read_file real_pose_path
+  let (cp1, cp2, cp3, cp4, csu) = load_state 0
+  if length result == 0 then
+    http_response 200 "OK" "application/json" (state_json cp1 cp2 cp3 cp4 csu 1)
+  else
+    let parts = str_split " " result
+    if length parts < 3 then
+      http_response 200 "OK" "application/json" (state_json cp1 cp2 cp3 cp4 csu 1)
+    else
+      let ap1 = parse_int_signed (head parts)
+      let ap2 = parse_int_signed (head (tail parts))
+      let ap3 = parse_int_signed (head (tail (tail parts)))
+      http_response 200 "OK" "application/json" (state_json ap1 ap2 ap3 cp4 csu 1)
+
 route_actual _ =
   let mode = bridge_mode_env 0
   if mode == "tcp" then route_actual_tcp 0
+  else if mode == "fifo" then route_actual_fifo 0
   else
     let (cp1, cp2, cp3, cp4, csu) = load_state 0
     http_response 200 "OK" "application/json" (state_json cp1 cp2 cp3 cp4 csu 1)
