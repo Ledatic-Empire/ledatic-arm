@@ -1685,7 +1685,13 @@ input[type=range].slider:disabled::-moz-range-thumb { background: var(--mute); }
 const POLL_MS    = 200;
 const ACTUAL_POLL_MS = 500;
 const CHAIN_RENDER_MAX = 15;
-const GHOST_THRESHOLD_MM = 2.0;
+// Set ABOVE the real settled servo tolerance, measured live 2026-06-14: the arm
+// tracks to <=5.4mm tip divergence at rest (±~7 pulses ≈ ±1.7° amplified down the
+// arm), plus ~9-pulse elbow backlash. A 2mm threshold (the original un-calibrated
+// guess, from before fifo readback existed) flags that normal tolerance as a fault.
+// 12mm clears tolerance+backlash but still trips on real faults -- the base bug was
+// tens of mm. Tighten only with feed-forward calibration that shrinks the tolerance.
+const GHOST_THRESHOLD_MM = 12.0;
 // Only trust an /actual divergence once motion has settled. The arm legitimately
 // trails the commanded pose during a move (the 0.5s poll catches it mid-trajectory),
 // so without this gate the ghost flickers on every move. Flag PERSISTENT divergence
