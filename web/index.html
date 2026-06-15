@@ -249,6 +249,15 @@ button, input { font-family: inherit; color: inherit; }
 .viewer-legend .swatch.ghost {
   border-top: 2px dashed #7fb0d8;
 }
+/* relaxed/sagging is benign — a muted/dim dashed swatch so a sag never reads as alarm */
+.viewer-legend .swatch.ghost-relaxed {
+  border-top: 2px dashed var(--dim);
+}
+.viewer-legend .row.relaxed { color: var(--mute); }
+/* open-loop provenance note: wrist + suction are commanded, never sensed */
+.viewer-legend .row.provenance { color: var(--mute); opacity: 0.85; }
+.viewer-legend .row.relaxed.hidden,
+.viewer-legend .row.provenance.hidden { display: none; }
 .viewer-legend .row.hidden { display: none; }
 
 .viewer-tools {
@@ -1468,7 +1477,9 @@ input[type=range].slider:disabled::-moz-range-thumb { background: var(--mute); }
 
       <div class="viewer-legend">
         <span class="row"><span class="swatch"></span>commanded</span>
-        <span class="row ghost-row hidden" id="legend-ghost"><span class="swatch ghost"></span>actual arm (diverged)</span>
+        <span class="row ghost-row hidden" id="legend-ghost"><span class="swatch ghost"></span>actual arm (diverged — fault)</span>
+        <span class="row relaxed hidden" id="legend-relaxed"><span class="swatch ghost ghost-relaxed"></span>actual arm (relaxed / sagging — benign)</span>
+        <span class="row provenance hidden" id="legend-provenance" title="bus servos 1-3 are position-sensed; the LFD-01M wrist + vacuum are open-loop PWM with no feedback">joints sensed · wrist/suction open-loop (commanded)</span>
       </div>
 
       <div class="viewer-tools">
@@ -1763,9 +1774,15 @@ let chainTipEl = null;
 let anchorBusy = false;
 let lastAnchorResult = null;
 
-// Actual-arm readback (for ghost)
+// Actual-arm readback (for ghost). THREE mutually-exclusive divergence categories:
+//   on-command     — within GHOST_THRESHOLD_MM (no ghost)
+//   actualDiffers  — loaded yet diverged >12mm = a real FAULT (cyan ghost + alarm)
+//   actualRelaxed  — relaxed (loaded===0) & diverged >12mm = benign sag (dim ghost, no alarm)
+// A relaxed sag must NEVER suppress a genuine fault: the gate keys on an EXPLICIT
+// loaded===0; an absent/garbled flag falls through to actualDiffers (fail-loud).
 let actualState = null;
 let actualDiffers = false;
+let actualRelaxed = false;
 
 // Motion plan (server-provided eased interpolation)
 let motionActive = false;
@@ -2501,9 +2518,11 @@ function updateEstop(s) {
 
 // ---------- servo load / auto-relax indicator ----------
 // In real mode the 3 bus servos unload after idle_relax_sec (default 10s) of no
-// movement and the arm sags; the next move re-loads them. We can't read load
-// directly (one-way bridge) so we ESTIMATE from time-since-last-move. Honest
-// labels: "loaded" right after a move, "relaxing soon", then "relaxed (sagging)".
+// movement and the arm sags; the next move re-loads them. The fifo readback path
+// now carries GROUND-TRUTH load (/actual `loaded`), so we trust that when present
+// and fall back to the time-since-last-move ESTIMATE for sim/tcp (always loaded=1)
+// or when no readback has arrived yet. Honest labels either way: "loaded",
+// "relaxing soon", "relaxed (sagging)".
 function updateServoState(s) {
   const el = $("#servo-state");
   const lbl = $("#servo-label");
@@ -2521,6 +2540,20 @@ function updateServoState(s) {
     el.dataset.load = "loaded";
     lbl.textContent = "servos · loaded";
     det.textContent = "moving";
+    return;
+  }
+  // Ground truth from the readback, when we have it: loaded===0 means the relay
+  // confirmed the bus servos are unloaded (teaching mode) and the arm is sagging.
+  if (actualState && actualState.loaded === 0) {
+    el.dataset.load = "relaxed";
+    lbl.textContent = "servos · relaxed (sagging)";
+    det.textContent = "readback: unloaded";
+    return;
+  }
+  if (actualState && actualState.loaded === 1 && lastMoveAt !== 0) {
+    el.dataset.load = "loaded";
+    lbl.textContent = "servos · loaded";
+    det.textContent = "readback: loaded";
     return;
   }
   const idle = (Date.now() - lastMoveAt) / 1000;
@@ -3253,13 +3286,24 @@ async function fetchActual() {
     // Gate on motion-settled: the arm trails the command during a move (the poll
     // samples mid-trajectory), so only flag divergence that PERSISTS after it stops.
     const settled = !motionActive && (Date.now() - motionEndedAt) >= GHOST_SETTLE_MS;
-    actualDiffers = settled && computeActualDiffers(state, actualState);
+    const diverged = settled && computeActualDiffers(state, actualState);
+    // Category split (C3): a divergence WHILE relaxed (loaded===0) is benign sag;
+    // a divergence WHILE loaded — or with an absent/garbled flag — is a real fault.
+    // Explicit ===0 so a missing/bad `loaded` fails LOUD (treated as fault), never silent.
+    actualRelaxed = diverged && isReal(state) && actualState.loaded === 0;
+    actualDiffers = diverged && !actualRelaxed;
   } catch (e) {
     actualState = null;
     actualDiffers = false;
+    actualRelaxed = false;
   }
-  // legend row only when an actual divergence is visible
+  // legend rows: fault and relaxed are mutually exclusive; only one ever shows.
+  // The provenance note rides along whenever either ghost is on screen, so the
+  // operator knows the ghost's joints are sensed but wrist/suction are commanded.
+  const ghostVisible = showGhost && (actualDiffers || actualRelaxed);
   $("#legend-ghost").classList.toggle("hidden", !(showGhost && actualDiffers));
+  $("#legend-relaxed").classList.toggle("hidden", !(showGhost && actualRelaxed));
+  $("#legend-provenance").classList.toggle("hidden", !ghostVisible);
 }
 
 function computeActualDiffers(cmd, act) {
@@ -3280,7 +3324,7 @@ function computeActualDiffers(cmd, act) {
 function drawGhostArm(basis) {
   if (!showGhost) return;
   if (!actualState || !actualState.fk) return;
-  if (!actualDiffers) return;
+  if (!actualDiffers && !actualRelaxed) return;
 
   const fk = actualState.fk;
   const base     = fk.base     || [0, 0, 0];
@@ -3290,9 +3334,17 @@ function drawGhostArm(basis) {
   const tip      = fk.tip;
   if (!elbow || !wrist || !tip) return;
 
-  // distinct cyan-ish "spectral" ghost so divergence reads at a glance
-  const ghostInk    = "#7fb0d8";
-  const ghostAccent = "#56c6d8";
+  // Ink by category: a FAULT (loaded yet diverged) reads as a distinct cyan-ish
+  // "spectral" ghost; a benign RELAXED/SAGGING pose reads MUTED (--dim/--mute) so it
+  // never alarms — the operator still SEES the real sag, but it doesn't shout fault.
+  let ghostInk, ghostAccent;
+  if (actualRelaxed) {
+    ghostInk    = COL_DIM;   // #5c706e
+    ghostAccent = COL_MUTE;  // #7a8e8c
+  } else {
+    ghostInk    = "#7fb0d8";
+    ghostAccent = "#56c6d8";
+  }
   const dash = [3, 4];
 
   strokeLine3(basis, base, shoulder, { color: ghostInk, width: 1.4, alpha: 0.6, dash });
