@@ -134,7 +134,36 @@ each joint jogged from home in isolation):
 **not** guarantee combined-pose safety — the arm can still reach the table or
 itself inside these ranges. To widen them or capture workspace/collision limits,
 re-run `tools/arm_limits.py` (adjust the `CAPS`) **with a human watching**, since
-`get_position` senses servo hard-stops but not soft collisions.
+`get_position` senses servo hard-stops but not soft collisions. The supervised
+swept-volume mapper for that measurement is `tools/envelope_map.py` (see §8).
+
+**`safe_limits.json` is the single fail-closed envelope source.** The relay
+(`tools/repl_relay.py` `load_limits_or_die()`) treats this file as the *only*
+clamp-envelope source — there is no hardcoded fallback. If it is
+missing/malformed/inverted (a non-`[lo,hi]` pair, non-numeric or non-finite
+bound, `lo>=hi`, missing `servo_pulse`/`wrist_us`/`xyz` key) the relay **refuses
+to start** (`sys.exit(2)`). An unknown servo/axis at runtime drops the frame
+(no motion) rather than inventing a range. Do not reintroduce default ranges,
+and do not wrap the relay in an auto-restart loop (that re-buries the fail-closed
+signal).
+
+**Programs are now gated in code, not just by author discipline.** Three
+in-code gates (all sharing the *same* clamp + FK as live actuation, so there is
+no second geometry to drift):
+
+- **`/validate_program?name=X`** — non-actuating pre-flight: clamps each step and
+  runs `envelope_check`, returning one violation object per bad step. Safe to
+  call with the bridge on (no `save_state`/attest/bridge_send).
+- **The ~120 mm table-floor gate** (HTTP 422 with a `floor_mm` field) fires
+  *after* clamp at every actuation chokepoint — `/pose`, `/reach`,
+  `/poses/load` — so an in-range pulse triple whose tip would strike the work
+  surface is rejected. The old 5 mm origin-plane sanity is kept alongside it.
+- **`envelope_check`** (floor + 5 mm origin + base-column `r_xy<50mm` +
+  max-reach `dist>266.4mm`) is the autonomous combined-pose predicate. Both
+  `tools/program_runner.sh` (fail-closed pre-flight + a per-step HTTP-status
+  backstop) and `/program` (inline reject) refuse to actuate on its `ok:false`.
+  Honestly labeled: it does **not** model link-to-link self-intersection — that
+  needs the supervised measurement in §8.
 
 ## 7. REPL API (confirmed via `dir(arm)` / `dir(arm.bus_servo)`)
 
@@ -156,11 +185,72 @@ nozzle.pump_f / pump_b / valve_f / valve_b   # pump + valve H-bridge primitives
 
 ## 8. Known gaps / v2
 
-- **Relax button in the viewer** — no `/relax` route yet; relax is `teaching_mode()`
-  over the REPL only.
-- **Combined-pose / workspace collision limits** — not measured (needs supervised run).
-- **No feedback to the viewer** — the bridge is one-way; the viewer shows the sim's
-  commanded pose, not the arm's true `read_position`.
+### Closed this round
+
+- **Feedback to the viewer — no longer one-way.** `/actual` recomputes
+  reachability from the **real** bus-servo readback (`reach_from_pulses` over the
+  same FK as `/state`) and carries a `sources` provenance field. The fifo
+  readback file gained a 4th `loaded` token, and the viewer has a *third* ghost
+  category — *relaxed / sagging (benign)*, drawn muted — so an idle auto-relax sag
+  no longer reads as a fault. (A relaxed sag never suppresses a genuine fault: the
+  gate keys on an explicit `loaded===0`; an absent/garbled flag falls through to
+  the fault path, fail-loud.)
+- **Observed-outcome attestation.** After a commanded move settles, the relay
+  fires `/attest_observed`, which appends an `observed` (or `observed_relaxed`)
+  hash-chain entry recording the **real** bus-servo readback `p1,p2,p3` plus the
+  last-commanded wrist/suction. Idempotent by command `seq`; chained via the
+  atomic append path. Replay (`tools/replay_chain.py`) explicitly skips these
+  outcome entries — they record what the arm *did*, not a command to re-issue.
+- **Combined-pose / workspace gates in code.** The ~120 mm table-floor gate,
+  `envelope_check` (floor + origin + base-column + max-reach), `/validate_program`
+  pre-flight, `program_runner.sh` fail-closed pre-flight + per-step HTTP backstop,
+  and the `/program` inline reject all gate programs in code now (see §6). A new
+  non-actuating `/selftest_geom` route asserts the home-pose tip-z golden so a
+  future geometry edit can't silently drift.
+- **Chain durability.** Single-entry atomic append (`cat >> chain`) + tmp+rename
+  pointers/state; `tools/verify_chain.py --dir/--check-pointers/--repair`
+  recovers a trailing torn line and resyncs pointers (interior breaks are a hard
+  FAIL, never auto-repaired).
+- **Fail-closed clamp envelope + bounded e-stop.** `safe_limits.json` is the only
+  clamp source (relay exits 2 if it's bad — see §6). An out-of-band e-stop file
+  watch at 50 ms gives a bounded halt latency and is **fail-closed at startup**: a
+  latch already present when the relay starts halts on the first tick.
+
+### Deferred to a watched human session (NOT closed)
+
+- **Supervised swept-volume collision-envelope MEASUREMENT.** The autonomous
+  checker (`envelope_check`) and the mapping tool (`tools/envelope_map.py`) have
+  shipped, but the *empirical* link-to-link self-intersection envelope has not
+  been captured. `envelope_check` is honest-but-incomplete: floor + base-column +
+  max-reach only — it does **not** model the arm folding onto its own forearm.
+  `envelope_map.py` is **DRY-RUN by default** (it never opens the serial port or
+  moves the arm without an explicit `--apply`); the physical capture needs a human
+  watching the arm with a hand near power/e-stop, classifying each combined pose.
+  Until that session runs, do **not** claim full collision safety.
+- **Wrist (LFD-01M PWM) + vacuum pump are OPEN-LOOP / un-sensable.** There is no
+  position or vacuum feedback on these (`vacuum_sensor: false` in `maxarm.json`).
+  The chain and `/actual` record their **last-commanded** value, never a readback;
+  `sources.wrist` and `sources.suction` are *always* `"commanded"` and are never
+  fabricated as observed. No closed-loop control of these is planned at the
+  hardware level.
+- **Relax button in the viewer** — still no `/relax` route; relax remains
+  `teaching_mode()` over the REPL / the auto-relax watchdog (§10).
+
+### Attestation honesty boundary
+
+The hash chain attests **commanded intent** (the `pose`/`reach`/`home`/etc.
+entries) and the **settled observed outcome** for the three bus servos (the
+`observed` / `observed_relaxed` entries, from `get_position` readback after a move
+settles). It does **not** attest:
+
+- **the trajectory between** the commanded start and the settled end — only the
+  endpoints are sampled, not the path or any mid-flight overshoot;
+- **real-time servoed position** — the observed entry is a *settle-time* readback,
+  not continuous closed-loop feedback. The arm is commanded open-loop over a
+  one-way bridge; `/attest_observed` reports where the joints *ended up*, not a
+  servo loop tracking error. **This is not closed-loop control.**
+- **the wrist and suction** — open-loop and physically un-sensable (above); their
+  attested value is always the last command, flagged `"commanded"`.
 
 ## 9. Troubleshooting
 

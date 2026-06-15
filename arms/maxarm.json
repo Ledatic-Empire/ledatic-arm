@@ -17,7 +17,8 @@
     "L2_upper_arm":      128.4,
     "L3_forearm":        138.0,
     "L4_wrist_to_tip":    16.8,
-    "_source": "Arduino/.../espmax.h. Python espmax.py has rounded values (84.0/8.2/128.0)."
+    "_source": "Arduino/.../espmax.h. Python espmax.py has rounded values (84.0/8.2/128.0).",
+    "_runtime_ssot": "src/armsim.rail g_l0..g_l4 accessors are the RUNTIME single-source-of-truth for kinematics (FK + IK + envelope_check both bind them) and MUST equal these values (84.4/8.14/128.4/138.0/16.8). The links_mm line in /state is a hand-maintained DISPLAY literal, NOT rebuilt from the accessors, so it can drift -- keep all three (this JSON, the g_l* accessors, and the /state literal) in sync by hand."
   },
 
   "joints": [
