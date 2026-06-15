@@ -5,8 +5,10 @@ Companion to verify_chain.py. Verification proves the chain wasn't
 tampered with; replay proves the chain captured the complete commanded
 sequence -- you can reproduce the exact arm trajectory.
 
-Skips control actions (estop/clear/program_start/program_stop) and
-the unreachable reach_unreachable entries. Optionally rate-limits.
+Skips control actions (estop/clear/program_start/program_stop), the
+unreachable reach_unreachable entries, and OUTCOME entries
+(observed/observed_relaxed -- they record what the arm DID, not a
+command to re-issue). Optionally rate-limits.
 
 Usage:
     tools/replay_chain.py                             # replay against localhost
@@ -24,6 +26,12 @@ import urllib.request
 
 
 REPLAYABLE = {"pose", "reach", "home", "poses_load", "nozzle", "suction"}
+
+# OUTCOME entries record what the arm DID (a readback), not a command to
+# re-issue. They must NEVER be replayed -- replaying an observed readback as if
+# it were a commanded pose would actuate the arm to a sensor reading. Kept as an
+# explicit deny-set (belt-and-suspenders on REPLAYABLE membership).
+OUTCOME_KINDS = {"observed", "observed_relaxed"}
 
 
 def get(base, path, **params):
@@ -84,7 +92,7 @@ def main():
         state = entry["state"]
         p1, p2, p3, p4_us, su = (int(x) for x in state.split(","))
 
-        if kind not in REPLAYABLE:
+        if kind in OUTCOME_KINDS or kind not in REPLAYABLE:
             print(f"  [{idx:3d}] skip   {kind}")
             skipped += 1
             continue

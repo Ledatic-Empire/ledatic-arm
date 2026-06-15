@@ -12,15 +12,34 @@ import "stdlib/math.rail"
 import "stdlib/env.rail"
 
 -- ═════ Geometry reference (mm) -- mirrors arms/maxarm.json ═════
--- NOTE: Rail v5 miscompiles binary ops touching top-level float
--- constants (returns garbage like 1.11e+226). Geometry values are
--- inlined as literals at every use-site below; this block is for
--- humans only.
---    l0=84.4 l1=8.14 l2=128.4 l3=138.0 l4=16.8
---    z_max_mm=225.0  xy_min_mm=50.0
---    pi=3.14159265358979  2pi=6.28318530717958
---    deg2rad=0.01745329251994  rad2deg=57.29577951308232
---    yaw_offset=2.61799387799149 (= 150 deg in rad)
+-- GEOMETRY SSOT (A8): every kinematic constant lives here as a
+-- per-constant zero-arg accessor (bare float-literal body). Consumers
+-- (fk_full, ik_solve, ik_theta1, deg_to_rad, rad_to_deg, acos_safe,
+-- state_json links_mm) bind a LOCAL at function top -- `let l0_l = g_l0 0`
+-- -- and use that. So the z-floor gate's FK (fk_tip_z -> fk_full) can no
+-- longer drift from the IK FK: one source feeds both.
+--
+-- Values MUST equal arms/maxarm.json links_mm (84.4/8.14/128.4/138.0/16.8).
+-- maxarm.json is the human-canonical source; these accessors are the
+-- runtime SSOT and the two must match.
+--
+-- The old "Rail v5 miscompiles binary ops touching top-level float
+-- constants" workaround (inline literals everywhere) is now moot: the
+-- top-const-float bug was fixed upstream (zemo-g/rail f851882, 2026-05-15).
+-- A tuple-of-constants accessor is STILL unsafe (live tuple-destructure-float
+-- codegen bug -> SIGSEGV / 2.2e-314), so the SSOT is per-constant zero-arg
+-- functions, NEVER `geom _ = (l0,l1,...)`. Do NOT collapse this block.
+--    z_max_mm=225.0  xy_min_mm=50.0  (workspace limits, owned elsewhere)
+g_l0 _ = 84.4
+g_l1 _ = 8.14
+g_l2 _ = 128.4
+g_l3 _ = 138.0
+g_l4 _ = 16.8
+g_pi _ = 3.14159265358979
+g_two_pi _ = 6.28318530717958
+g_yaw _ = 2.61799387799149
+g_deg2rad _ = 0.01745329251994
+g_rad2deg _ = 57.29577951308232
 
 -- ═════ Pulse clamps (matches espmax.py set_servo_in_range) ═════
 j1_p_lo = 0
@@ -179,13 +198,18 @@ deg_to_us_nozzle deg = 1500.0 + deg * 1000.0 / 90.0
 -- ═════ Trig helpers ═════
 -- All top-const-free per v5 miscompile workaround.
 
-deg_to_rad d = d * 0.01745329251994
+deg_to_rad d =
+  let deg2rad_l = g_deg2rad 0
+  d * deg2rad_l
 
-rad_to_deg r = r * 57.29577951308232
+rad_to_deg r =
+  let rad2deg_l = g_rad2deg 0
+  r * rad2deg_l
 
 acos_safe x =
+  let pi_l = g_pi 0
   if x > 1.0 then 0.0
-  else if x < 0.0 - 1.0 then 3.14159265358979
+  else if x < 0.0 - 1.0 then pi_l
   else
     let xsq = pow x 2.0
     atan2 (sqrt (1.0 - xsq)) x
@@ -206,15 +230,15 @@ acos_safe x =
 -- Note: alpha2 here is in radians from the j2_deg conversion.
 
 fk_full p1 p2 p3 =
-  -- Local copies of constants -- v5 miscompiles top-const in binary ops.
-  let l0_l = 84.4
-  let l1_l = 8.14
-  let l2_l = 128.4
-  let l3_l = 138.0
-  let l4_l = 16.8
-  let pi_l = 3.14159265358979
-  let two_pi_l = 6.28318530717958
-  let yaw_l = 2.61799387799149
+  -- Local copies of the geometry SSOT accessors (C7: bind once at top).
+  let l0_l = g_l0 0
+  let l1_l = g_l1 0
+  let l2_l = g_l2 0
+  let l3_l = g_l3 0
+  let l4_l = g_l4 0
+  let pi_l = g_pi 0
+  let two_pi_l = g_two_pi 0
+  let yaw_l = g_yaw 0
   let a1d = pulse_to_deg_j1 p1
   let a2d = pulse_to_deg_j2 p2
   let a3d = pulse_to_deg_j3 p3
@@ -226,10 +250,10 @@ fk_full p1 p2 p3 =
   let cos_beta = cos beta
   let l2sq = pow l2_l 2.0
   let l3sq = pow l3_l 2.0
-  let two_l2_l3 = 2.0 * 128.4 * 138.0
+  let two_l2_l3 = 2.0 * l2_l * l3_l
   let side_beta_sq = l2sq + l3sq - two_l2_l3 * cos_beta
   let side_beta = sqrt side_beta_sq
-  let two_l2_sb = 2.0 * side_beta * 128.4
+  let two_l2_sb = 2.0 * side_beta * l2_l
   let cos_gamma_raw = (side_beta_sq + l2sq - l3sq) / two_l2_sb
   let cos_gamma = if cos_gamma_raw > 1.0 then 1.0 else cos_gamma_raw
   let gamma = acos_safe cos_gamma
@@ -268,8 +292,8 @@ fk_full p1 p2 p3 =
 -- Returns (a1_deg, a2_deg, a3_deg, reachable).
 
 ik_theta1 x y =
-  let pi_l = 3.14159265358979
-  let two_pi_l = 6.28318530717958
+  let pi_l = g_pi 0
+  let two_pi_l = g_two_pi 0
   if x == 0.0 then
     if y > 0.0 - 0.000001 then pi_l / 2.0
     else
@@ -283,12 +307,12 @@ ik_theta1 x y =
     if t < 0.0 then t + two_pi_l else t
 
 ik_solve x_in y_in z_in =
-  let l0_l = 84.4
-  let l1_l = 8.14
-  let l2_l = 128.4
-  let l3_l = 138.0
-  let l4_l = 16.8
-  let pi_l = 3.14159265358979
+  let l0_l = g_l0 0
+  let l1_l = g_l1 0
+  let l2_l = g_l2 0
+  let l3_l = g_l3 0
+  let l4_l = g_l4 0
+  let pi_l = g_pi 0
   let x = 0.0 - x_in
   let y = y_in
   let z = z_in - l0_l
@@ -307,11 +331,11 @@ ik_solve x_in y_in z_in =
   else if r < 0.000001 then (0.0, 0.0, 0.0, 0)
   else
     let alpha = atan2 z r
-    let two_l2_l3 = 2.0 * 128.4 * 138.0
+    let two_l2_l3 = 2.0 * l2_l * l3_l
     let beta_num = l2sq + l3sq - r2z2
     let beta_arg = beta_num / two_l2_l3
     let beta = acos_safe beta_arg
-    let two_l2_dist = 2.0 * 128.4 * dist
+    let two_l2_dist = 2.0 * l2_l * dist
     let gamma_num = l2sq + r2z2 - l3sq
     let gamma_arg = gamma_num / two_l2_dist
     let gamma = acos_safe gamma_arg
@@ -339,9 +363,15 @@ load_state _ =
       let su = parse_int_signed (head (tail (tail (tail (tail lines)))))
       (p1, p2, p3, p4, su)
 
+-- Atomic state write: write_file is O_TRUNC (compile.rail:4650), so a
+-- crash mid-write would leave a truncated state file that load_state
+-- silently maps back to HOME (and would then be chained as if real).
+-- Write to <state_path>.tmp then `mv -f` (rename is atomic same-fs).
 save_state p1 p2 p3 p4 su =
   let body = join "\n" [show p1, show p2, show p3, show p4, show su, ""]
-  let _ = write_file state_path body
+  let tmp = join "" [state_path, ".tmp"]
+  let _ = write_file tmp body
+  let _ = shell (join "" ["mv -f ", tmp, " ", state_path])
   0
 
 -- ═════ Suction state mapping ═════
@@ -383,6 +413,10 @@ cp_chain _      = join "" [resolve_chain_dir 0, "/armsim_chain.jsonl"]
 cp_chain_head _ = join "" [resolve_chain_dir 0, "/armsim_chain_head.txt"]
 cp_chain_idx _  = join "" [resolve_chain_dir 0, "/armsim_chain_idx.txt"]
 cp_anchor _     = join "" [resolve_chain_dir 0, "/armsim_anchors.jsonl"]
+-- A1 (C4): persisted last-chained observed seq -> idempotency. Written via
+-- the C6 tmp+rename convention (write_file is O_TRUNC, never write the live
+-- pointer in place).
+cp_observed_seq _ = join "" [resolve_chain_dir 0, "/armsim_observed_seq.txt"]
 
 -- ═════ Per-PID attest temp path (no race under serve.py threading) ═════
 attest_tmp_for_pid _ =
@@ -577,6 +611,38 @@ chain_current_idx _ =
   let s = read_file (cp_chain_idx 0)
   if length s == 0 then 0 else parse_int_signed s
 
+-- ═════ Atomic single-entry chain append (shared persistence tail) ═════
+-- ROOT CAUSE this replaces: the old append did read_file (whole jsonl) ++
+-- write_file (O_TRUNC) -- O(N^2) AND torn-write (file truncated to 0 first),
+-- plus two further truncate-writes for head/idx that could desync on crash.
+-- append_file has NO native ARM64 codegen, so the only atomic-append escape
+-- hatch is shell() with `>>`. The entry bytes (which may include json_escaped
+-- user params) go through a tmp FILE, never the shell arg list, so user bytes
+-- never reach the command line. new_sha (64 hex) + show next_idx (digits) +
+-- our own paths are all shell-safe.
+--
+-- ORDER IS LOAD-BEARING (verify_chain.py --repair relies on it):
+--   1. append the entry line (cat tmp >> chain) -- the only torn window is
+--      now the NEW line, never the 241KB chain
+--   2. advance head via tmp+rename (atomic; a reader never sees a half head)
+--   3. advance idx via tmp+rename
+-- A crash after (1) but before (2) leaves the chain with one extra committed
+-- entry the pointer doesn't know about; recovery resyncs the pointer FORWARD
+-- to the last intact line. We never lose a committed entry and never advance
+-- the pointer past an unwritten entry.
+chain_persist new_sha next_idx entry =
+  let chp = cp_chain 0
+  let hp = cp_chain_head 0
+  let ip = cp_chain_idx 0
+  let etmp = join "" [attest_tmp_for_pid 0, ".entry"]
+  let _ = write_file etmp entry
+  let cmd = join "" ["{ cat ", etmp, " >> ", chp,
+                     "; printf %s ", new_sha, " > ", hp, ".tmp && mv -f ", hp, ".tmp ", hp,
+                     "; printf %s ", show next_idx, " > ", ip, ".tmp && mv -f ", ip, ".tmp ", ip,
+                     "; rm -f ", etmp, "; }"]
+  let _ = shell cmd
+  new_sha
+
 -- Hash the action data directly (not the full state_json) so the chain
 -- can be updated BEFORE state_json is built. This lets /state and the
 -- response from mutating routes both show the up-to-date chain head.
@@ -598,12 +664,7 @@ attest_action kind params p1 p2 p3 p4 su =
                        "\",\"state\":\"", state_canon,
                        "\",\"prev_sha\":\"", prev,
                        "\",\"sha\":\"", new_sha, "\"}\n"]
-  let chp = cp_chain 0
-  let existing = read_file chp
-  let _ = write_file chp (join "" [existing, entry])
-  let _ = write_file (cp_chain_head 0) new_sha
-  let _ = write_file (cp_chain_idx 0) (show next_idx)
-  new_sha
+  chain_persist new_sha next_idx entry
 
 filter_nonempty lst =
   if lst == [] then []
@@ -617,14 +678,121 @@ fk_tip_z p1 p2 p3 =
   let (sh_x, sh_y, sh_z, el_x, el_y, el_z, wr_x, wr_y, wr_z, tl_x, tl_y, tl_z) = fk_full p1 p2 p3
   tl_z
 
+-- ═════ Reachability from REAL pulses (A7 / C2) ═════
+-- /actual must report whether the arm's ACTUAL pose (from the bus-servo
+-- readback) is inside the workspace, not hardcode reachable=1. Reuses the
+-- SAME fk_full + the SAME workspace constants as the IK reach gate so
+-- /actual reachability is computed like-with-like vs /reach and /state:
+--   z floor 5  (ik_solve floor sense / route_reach origin)
+--   r_xy < 50  (base column, route_reach:954)
+--   z > 225    (z_max workspace cap, route_reach:942)
+-- A full inverse-distance dist>266.4 test is redundant once FK is the source
+-- (an in-range pulse triple's FK tip is by construction within mechanical
+-- reach); the planar+z gates are what matter for honesty. Returns 1=reachable
+-- 0=outside.
+reach_from_pulses p1 p2 p3 =
+  let (sh_x, sh_y, sh_z, el_x, el_y, el_z, wr_x, wr_y, wr_z, tl_x, tl_y, tl_z) = fk_full p1 p2 p3
+  let r_xy = sqrt ((pow tl_x 2.0) + (pow tl_y 2.0))
+  if tl_z < 5.0 then 0
+  else if r_xy < 50.0 then 0
+  else if tl_z > 225.0 then 0
+  else 1
+
+-- ═════ Table-floor gate (A3 / C8) ═════
+-- Real table floor: tip below this strikes the work surface. Mirrors
+-- arms/safe_limits.json xyz.z[0]=120 and the new top-level "z_floor_mm":120.
+-- LOCAL-const zero-arg accessors (NOT top-level float consts; same SSOT
+-- strategy as the g_l* geometry accessors above). Consumers bind to a
+-- local at function top, e.g. `let floor_l = table_floor_mm 0`.
+--   table_floor_mm: real ~120mm work-surface floor (the operative gate).
+--   origin_floor_mm: 5mm origin-plane sanity (kept -- below origin can
+--     never be a real pose; 120 subsumes it but both are documented).
+table_floor_mm _ = 120.0
+origin_floor_mm _ = 5.0
+
+-- ═════ Config-space safety envelope (A10 / C9) ═════
+-- envelope_check p1 p2 p3 -> (ok, reason_code). A single combined-pose
+-- predicate shared by route_pose, route_poses_load, /validate_program (A4)
+-- and the sim, so sim-validation, program pre-flight, and live actuation
+-- gate on IDENTICAL geometry. Clamp the pulses with j*_p_lo/hi BEFORE
+-- calling (callers already do) so the envelope sees what is actually
+-- actuated.
+--   reason_code: 0=ok
+--                1=tip below the real ~120mm table floor (work-surface strike)
+--                2=tip below the 5mm origin plane (can never be a real pose)
+--                3=tip inside the base column r_xy<50mm (self/base collision)
+--                4=tip beyond max reach dist>266.4mm (IK would have no solution)
+-- These are SIMPLE, honestly-labeled heuristics: floor + base-column +
+-- max-reach. They do NOT model link-to-link self-intersection (the arm
+-- folding onto its own forearm) -- that genuinely requires the physical
+-- swept-volume measurement (tools/envelope_map.py, deferred to a human
+-- session). Do NOT claim full collision safety from this predicate.
+--
+-- LOCAL-const zero-arg accessors (same SSOT strategy as g_l* / table_floor_mm;
+-- NOT top-level float consts). base_radius_mm mirrors maxarm.json
+-- workspace_mm.xy_min_radius=50 (and safe_limits is silent on it).
+-- max_reach_mm mirrors the 266.4 guard inside ik_solve:330 -- if that
+-- changes, change this too (they are the SAME workspace bound).
+base_radius_mm _ = 50.0
+max_reach_mm _ = 266.4
+
+-- Reach distance is measured from the shoulder pivot height (L0 base column),
+-- matching ik_solve's z' = z - L0 before the planar reach math.
+envelope_check p1 p2 p3 =
+  let (sh_x, sh_y, sh_z, el_x, el_y, el_z, wr_x, wr_y, wr_z, tl_x, tl_y, tl_z) = fk_full p1 p2 p3
+  let l0_l = g_l0 0
+  let floor_l = table_floor_mm 0
+  let origin_l = origin_floor_mm 0
+  let base_r_l = base_radius_mm 0
+  let max_r_l = max_reach_mm 0
+  let r_xy = sqrt ((pow tl_x 2.0) + (pow tl_y 2.0))
+  let dz = tl_z - l0_l
+  let dist = sqrt ((pow tl_x 2.0) + (pow tl_y 2.0) + (pow dz 2.0))
+  if tl_z < origin_l then (0, 2)
+  else if tl_z < floor_l then (0, 1)
+  else if r_xy < base_r_l then (0, 3)
+  else if dist > max_r_l then (0, 4)
+  else (1, 0)
+
+-- Map an envelope reason_code to the rejection-response JSON. floor/origin
+-- reuse the C8 floor_response shape (so the viewer/A4 keep recognizing it);
+-- base-column + max-reach get their own 422 bodies with the reason_code.
+envelope_response p1 p2 p3 code =
+  let tip_z = fk_tip_z p1 p2 p3
+  if code == 1 then floor_response tip_z (table_floor_mm 0)
+  else if code == 2 then floor_response tip_z (table_floor_mm 0)
+  else if code == 3 then
+    let body = join "" ["{\"ok\":false,\"reason\":\"tip inside base column (r_xy < ",
+                        show (float_round (base_radius_mm 0)),
+                        "mm, self/base collision)\",\"reason_code\":3,\"tip_z\":",
+                        sf tip_z, "}"]
+    http_response 422 "Unprocessable Entity" "application/json" body
+  else
+    let body = join "" ["{\"ok\":false,\"reason\":\"tip beyond max reach (dist > ",
+                        sf (max_reach_mm 0),
+                        "mm, no IK solution)\",\"reason_code\":4,\"tip_z\":",
+                        sf tip_z, "}"]
+    http_response 422 "Unprocessable Entity" "application/json" body
+
 -- Common rejection bodies
 estop_response _ =
   let body = "{\"ok\":false,\"reason\":\"estop active - POST /clear to release\"}"
   http_response 423 "Locked" "application/json" body
 
-z_floor_response z_got =
-  let body = join "" ["{\"ok\":false,\"reason\":\"tip z below 5mm floor\",\"tip_z\":", sf z_got, "}"]
+-- C8 422 shape: {"ok":false,"reason":"tip z <z> below table floor 120mm",
+--                "tip_z":<z>,"floor_mm":120}
+-- floor_mm is rendered as an int (C8/C3 show "120", not "120.0").
+floor_response z_got floor_mm =
+  let floor_i = float_round floor_mm
+  let body = join "" ["{\"ok\":false,\"reason\":\"tip z ", sf z_got,
+                      " below table floor ", show floor_i,
+                      "mm\",\"tip_z\":", sf z_got,
+                      ",\"floor_mm\":", show floor_i, "}"]
   http_response 422 "Unprocessable Entity" "application/json" body
+
+-- Thin wrapper: defaults to the real table floor so callers that don't
+-- pass a floor value (none after A3) reject against 120mm.
+z_floor_response z_got = floor_response z_got (table_floor_mm 0)
 
 parse_time_ms_or_default q =
   let s = qp_search_str (str_split "&" q) "time_ms"
@@ -678,7 +846,16 @@ motion_json_object _ =
 -- ═════ JSON building ═════
 sf x = show_float x
 
-state_json p1 p2 p3 p4 su reach =
+-- state_json SIGNATURE (CANONICAL, A2+A7 combined / C2): the existing 6
+-- params (p1 p2 p3 p4 su reach) are UNCHANGED; A2 appends `loaded` (int:
+-- 1=servos loaded/authoritative, 0=relaxed/sagging) and A7 appends
+-- `joint_src` (string: "observed" only on the /actual joints-from-readback
+-- paths, "commanded" everywhere else). The emitted C3 fields ("loaded" +
+-- "sources") sit immediately after "reachable":. Wrist + suction are ALWAYS
+-- "commanded" (LFD-01M PWM wrist + vacuum pump are open-loop, physically
+-- un-sensable -- NEVER labeled observed). /state always emits loaded=1,
+-- joints="commanded".
+state_json p1 p2 p3 p4 su reach loaded joint_src =
   let (sh_x, sh_y, sh_z, el_x, el_y, el_z, wr_x, wr_y, wr_z, tl_x, tl_y, tl_z) = fk_full p1 p2 p3
   let d1 = pulse_to_deg_j1 p1
   let d2 = pulse_to_deg_j2 p2
@@ -705,8 +882,10 @@ state_json p1 p2 p3 p4 su reach =
     "\"nozzle_deg\":", sf d4, ",",
     "\"suction\":\"", s_lbl, "\",",
     "\"links_mm\":[84.4,8.14,128.4,138.0,16.8],",
-    "\"limits\":{\"z_max\":225,\"xy_min_radius\":50,\"z_floor\":5},",
+    "\"limits\":{\"z_max\":225,\"xy_min_radius\":50,\"z_floor\":120,\"origin_floor\":5,\"base_radius\":50,\"max_reach\":266.4},",
     "\"reachable\":", show reach, ",",
+    "\"loaded\":", show loaded, ",",
+    "\"sources\":{\"joints\":\"", joint_src, "\",\"wrist\":\"commanded\",\"suction\":\"commanded\"},",
     "\"estop\":", show estop, ",",
     "\"bridge\":\"", bmode, "\",",
     "\"motion\":", motion_json_object 0, ",",
@@ -715,7 +894,7 @@ state_json p1 p2 p3 p4 su reach =
 
 state_json_current _ =
   let (p1, p2, p3, p4, su) = load_state 0
-  state_json p1 p2 p3 p4 su 1
+  state_json p1 p2 p3 p4 su 1 1 "commanded"
 
 -- ═════ HTTP response builder ═════
 http_response status st ct body =
@@ -731,6 +910,23 @@ http_response status st ct body =
 -- ═════ Route handlers ═════
 route_state _ =
   http_response 200 "OK" "application/json" (state_json_current 0)
+
+-- /selftest_geom -- geometry SSOT sanity check (A8). Runs fk_tip_z at the
+-- home pose (500,500,500) and asserts tip z ~= 212.8 (golden). If a future
+-- edit re-inlines a constant or the FK drifts from the IK FK, this fails.
+-- Non-actuating: no save_state / attest / bridge_send -- safe with bridge ON.
+selftest_geom_ok z =
+  let lo = 212.8 - 0.05
+  let hi = 212.8 + 0.05
+  if z < lo then 0 else if z > hi then 0 else 1
+
+route_selftest_geom _ =
+  let z = fk_tip_z home_p1 home_p2 home_p3
+  let ok = selftest_geom_ok z
+  let ok_str = if ok == 1 then "true" else "false"
+  let body = join "" ["{\"ok\":", ok_str, ",\"home_tip_z\":", sf z,
+                      ",\"golden\":212.8}"]
+  http_response 200 "OK" "application/json" body
 
 -- /pose?p1=&p2=&p3=&p4_us=&time_ms=
 route_pose q =
@@ -750,8 +946,13 @@ route_pose q =
     let np2 = if length s_p2 == 0 then cp2 else clamp_int j2_p_lo j2_p_hi raw_p2
     let np3 = if length s_p3 == 0 then cp3 else clamp_int j3_p_lo j3_p_hi raw_p3
     let np4 = if length s_p4 == 0 then cp4 else clamp_int j4_us_lo j4_us_hi raw_p4
-    let tip_z = fk_tip_z np1 np2 np3
-    if tip_z < 5.0 then z_floor_response tip_z
+    -- A3/A10 (C9) combined-pose envelope gate: table floor + origin plane +
+    -- base-column + max-reach, AFTER clamp_int so we validate the pose that is
+    -- actually actuated. Subsumes the old floor-only gate (codes 1/2 still
+    -- return the C8 floor_response shape). No short-circuit in Rail -> the
+    -- predicate nests its own if/else.
+    let (env_ok, env_code) = envelope_check np1 np2 np3
+    if env_ok == 0 then envelope_response np1 np2 np3 env_code
     else
       let tms = parse_time_ms_or_default q
       let _ = save_motion cp1 cp2 cp3 cp4 np1 np2 np3 np4 tms
@@ -759,7 +960,7 @@ route_pose q =
       let _ = attest_action "pose" q np1 np2 np3 np4 csu
       let _ = bridge_send_set_angle np1 np2 np3 tms
       let _ = bridge_send_set_pwm np4 tms
-      http_response 200 "OK" "application/json" (state_json np1 np2 np3 np4 csu 1)
+      http_response 200 "OK" "application/json" (state_json np1 np2 np3 np4 csu 1 1 "commanded")
 
 -- /reach?x=&y=&z=&time_ms= (mm)
 route_reach q =
@@ -770,19 +971,25 @@ route_reach q =
     let y = to_float (qp_get q "y")
     let z_raw = to_float (qp_get q "z")
     let z_clamped = if z_raw > 225.0 then 225.0 else z_raw
-    if z_raw < 5.0 then z_floor_response z_raw
+    -- A3/C8: reject a requested z below the real table floor early (z_clamped
+    -- only bounds the HIGH side). Keep 5mm origin sanity. The resulting-tip
+    -- check below is the authoritative backstop after IK + clamp_int.
+    let req_floor_l = table_floor_mm 0
+    let req_origin_l = origin_floor_mm 0
+    if z_raw < req_origin_l then floor_response z_raw req_floor_l
+    else if z_raw < req_floor_l then floor_response z_raw req_floor_l
     else
       let xsq = pow x 2.0
       let ysq = pow y 2.0
       let r_xy = sqrt (xsq + ysq)
       if r_xy < 50.0 then
         let _ = attest_action "reach_unreachable" q cp1 cp2 cp3 cp4 csu
-        http_response 200 "OK" "application/json" (state_json cp1 cp2 cp3 cp4 csu 0)
+        http_response 200 "OK" "application/json" (state_json cp1 cp2 cp3 cp4 csu 0 1 "commanded")
       else
         let (a1, a2, a3, ok) = ik_solve x y z_clamped
         if ok == 0 then
           let _ = attest_action "reach_unreachable" q cp1 cp2 cp3 cp4 csu
-          http_response 200 "OK" "application/json" (state_json cp1 cp2 cp3 cp4 csu 0)
+          http_response 200 "OK" "application/json" (state_json cp1 cp2 cp3 cp4 csu 0 1 "commanded")
         else
           let raw_p1 = float_round (deg_to_pulse_j1 a1)
           let raw_p2 = float_round (deg_to_pulse_j2 a2)
@@ -791,14 +998,18 @@ route_reach q =
           let np2 = clamp_int j2_p_lo j2_p_hi raw_p2
           let np3 = clamp_int j3_p_lo j3_p_hi raw_p3
           let tip_z = fk_tip_z np1 np2 np3
-          if tip_z < 5.0 then z_floor_response tip_z
+          -- A3/C8 backstop: resulting tip vs real table floor, AFTER clamp_int.
+          let reach_floor_l = table_floor_mm 0
+          let reach_origin_l = origin_floor_mm 0
+          if tip_z < reach_origin_l then floor_response tip_z reach_floor_l
+          else if tip_z < reach_floor_l then floor_response tip_z reach_floor_l
           else
             let tms = parse_time_ms_or_default q
             let _ = save_motion cp1 cp2 cp3 cp4 np1 np2 np3 cp4 tms
             let _ = save_state np1 np2 np3 cp4 csu
             let _ = attest_action "reach" q np1 np2 np3 cp4 csu
             let _ = bridge_send_set_angle np1 np2 np3 tms
-            http_response 200 "OK" "application/json" (state_json np1 np2 np3 cp4 csu 1)
+            http_response 200 "OK" "application/json" (state_json np1 np2 np3 cp4 csu 1 1 "commanded")
 
 -- /nozzle?deg=&time_ms=
 route_nozzle q =
@@ -817,7 +1028,7 @@ route_nozzle q =
     let _ = attest_action "nozzle" q cp1 cp2 cp3 np4 csu
     let tms = parse_time_ms_or_default q
     let _ = bridge_send_set_pwm np4 tms
-    http_response 200 "OK" "application/json" (state_json cp1 cp2 cp3 np4 csu 1)
+    http_response 200 "OK" "application/json" (state_json cp1 cp2 cp3 np4 csu 1 1 "commanded")
 
 -- /suction?cmd=on|vent|off
 route_suction q =
@@ -835,7 +1046,7 @@ route_suction q =
     let _ = save_state cp1 cp2 cp3 cp4 nsu
     let _ = attest_action "suction" q cp1 cp2 cp3 cp4 nsu
     let _ = bridge_send_suction cmd_byte
-    http_response 200 "OK" "application/json" (state_json cp1 cp2 cp3 cp4 nsu 1)
+    http_response 200 "OK" "application/json" (state_json cp1 cp2 cp3 cp4 nsu 1 1 "commanded")
 
 -- /home?time_ms=
 route_home q =
@@ -849,7 +1060,7 @@ route_home q =
     let _ = bridge_send_set_angle home_p1 home_p2 home_p3 tms
     let _ = bridge_send_set_pwm home_p4_us tms
     let _ = bridge_send_suction 3
-    http_response 200 "OK" "application/json" (state_json home_p1 home_p2 home_p3 home_p4_us home_suction 1)
+    http_response 200 "OK" "application/json" (state_json home_p1 home_p2 home_p3 home_p4_us home_suction 1 1 "commanded")
 
 -- ═════ Named poses ═════
 -- Storage: one line per pose, format `<name> <p1> <p2> <p3> <p4_us> <suction>`.
@@ -931,8 +1142,12 @@ route_poses_load q =
       let p3 = clamp_int j3_p_lo j3_p_hi (parse_int_signed (head (tail (tail (tail parts)))))
       let p4 = clamp_int j4_us_lo j4_us_hi (parse_int_signed (head (tail (tail (tail (tail parts))))))
       let su = parse_int_signed (head (tail (tail (tail (tail (tail parts))))))
-      let tip_z = fk_tip_z p1 p2 p3
-      if tip_z < 5.0 then z_floor_response tip_z
+      -- A3/A10 (C9) combined-pose envelope gate on the loaded+clamped pose
+      -- (table floor + origin plane + base-column + max-reach). Same predicate
+      -- as route_pose / /validate_program so a stored pose that strays into a
+      -- combined-pose hazard is rejected identically.
+      let (env_ok, env_code) = envelope_check p1 p2 p3
+      if env_ok == 0 then envelope_response p1 p2 p3 env_code
       else
         let (cp1, cp2, cp3, cp4, csu) = load_state 0
         let tms = parse_time_ms_or_default q
@@ -941,7 +1156,7 @@ route_poses_load q =
         let _ = attest_action "poses_load" q p1 p2 p3 p4 su
         let _ = bridge_send_set_angle p1 p2 p3 tms
         let _ = bridge_send_set_pwm p4 tms
-        http_response 200 "OK" "application/json" (state_json p1 p2 p3 p4 su 1)
+        http_response 200 "OK" "application/json" (state_json p1 p2 p3 p4 su 1 1 "commanded")
 
 route_poses_delete q =
   let name = qp_get_str q "name"
@@ -985,9 +1200,16 @@ run_anchor_attest head_sha =
 anchor_success_body head_sha head_idx attest_json =
   let t = now_utc 0
   let anchor_entry = join "" ["{\"t\":\"", t, "\",\"head_idx\":", show head_idx, ",\"head_sha\":\"", head_sha, "\",\"attestation\":", attest_json, "}\n"]
+  -- Anchor file is a growing forensic JSONL; write_file is O_TRUNC, so a
+  -- crash mid-write would corrupt prior anchor history. /anchor is a rare
+  -- manual route, so the O(N) read-rewrite is acceptable -- but stage it
+  -- through <ap>.tmp then `mv -f` (atomic same-fs) per the C6 convention so
+  -- the live file is never truncated in place.
   let ap = cp_anchor 0
   let existing = read_file ap
-  let _ = write_file ap (join "" [existing, anchor_entry])
+  let atmp = join "" [ap, ".tmp"]
+  let _ = write_file atmp (join "" [existing, anchor_entry])
+  let _ = shell (join "" ["mv -f ", atmp, " ", ap])
   join "" ["{\"ok\":true,\"head_sha\":\"", head_sha, "\",\"head_idx\":", show head_idx, ",\"attestation\":", attest_json, "}"]
 
 anchor_fail_body head_sha head_idx =
@@ -1027,7 +1249,7 @@ route_estop _ =
   -- and HALT all bus servos NOW: interrupt any in-flight move; servos hold, don't drop.
   let _ = bridge_send_halt 0
   http_response 200 "OK" "application/json"
-    (state_json cp1 cp2 cp3 cp4 0 1)
+    (state_json cp1 cp2 cp3 cp4 0 1 1 "commanded")
 
 -- /clear -- release e-stop.
 route_clear _ =
@@ -1035,7 +1257,7 @@ route_clear _ =
   let (cp1, cp2, cp3, cp4, csu) = load_state 0
   let _ = attest_action "clear" "" cp1 cp2 cp3 cp4 csu
   http_response 200 "OK" "application/json"
-    (state_json cp1 cp2 cp3 cp4 csu 1)
+    (state_json cp1 cp2 cp3 cp4 csu 1 1 "commanded")
 
 -- /actual -- return the arm's TRUE pose so the viewer can draw the ghost.
 --   tcp  mode: send AA 55 READ_ANGLE via tools/read_arm_pose.sh.
@@ -1054,17 +1276,21 @@ route_actual_tcp _ =
   let cmd = join "" ["bash ", read_arm_pose_path, " ", host, " ", show port, " 2>/dev/null"]
   let result = shell cmd
   let (cp1, cp2, cp3, cp4, csu) = load_state 0
+  -- No-readback fallbacks return validated COMMANDED state -> reachable per
+  -- its committed value, loaded=1, joints="commanded" (C2).
   if length result == 0 then
-    http_response 200 "OK" "application/json" (state_json cp1 cp2 cp3 cp4 csu 1)
+    http_response 200 "OK" "application/json" (state_json cp1 cp2 cp3 cp4 csu 1 1 "commanded")
   else
     let parts = str_split " " result
     if length parts < 3 then
-      http_response 200 "OK" "application/json" (state_json cp1 cp2 cp3 cp4 csu 1)
+      http_response 200 "OK" "application/json" (state_json cp1 cp2 cp3 cp4 csu 1 1 "commanded")
     else
       let ap1 = parse_int_signed (head parts)
       let ap2 = parse_int_signed (head (tail parts))
       let ap3 = parse_int_signed (head (tail (tail parts)))
-      http_response 200 "OK" "application/json" (state_json ap1 ap2 ap3 cp4 csu 1)
+      -- A7 (C2): recompute reachability from the REAL pulses, joints="observed".
+      -- tcp bridge has no relay/relax model -> loaded is always 1 (no sag).
+      http_response 200 "OK" "application/json" (state_json ap1 ap2 ap3 cp4 csu (reach_from_pulses ap1 ap2 ap3) 1 "observed")
 
 -- fifo/repl readback: relay publishes live servo pulses to real_pose_path.
 -- Run the SAME FK as /state on them; wrist + suction stay commanded (cp4/csu),
@@ -1072,25 +1298,117 @@ route_actual_tcp _ =
 route_actual_fifo _ =
   let result = read_file real_pose_path
   let (cp1, cp2, cp3, cp4, csu) = load_state 0
+  -- No-readback fallbacks return validated COMMANDED state -> reachable per
+  -- its committed value, loaded=1, joints="commanded" (C2).
   if length result == 0 then
-    http_response 200 "OK" "application/json" (state_json cp1 cp2 cp3 cp4 csu 1)
+    http_response 200 "OK" "application/json" (state_json cp1 cp2 cp3 cp4 csu 1 1 "commanded")
   else
     let parts = str_split " " result
     if length parts < 3 then
-      http_response 200 "OK" "application/json" (state_json cp1 cp2 cp3 cp4 csu 1)
+      http_response 200 "OK" "application/json" (state_json cp1 cp2 cp3 cp4 csu 1 1 "commanded")
     else
       let ap1 = parse_int_signed (head parts)
       let ap2 = parse_int_signed (head (tail parts))
       let ap3 = parse_int_signed (head (tail (tail parts)))
-      http_response 200 "OK" "application/json" (state_json ap1 ap2 ap3 cp4 csu 1)
+      -- A2 (C1): 4th token is the loaded flag (1=loaded, 0=relaxed/sagging).
+      -- BACKWARD-COMPATIBLE: a legacy 3-token file defaults lf=1 (loaded /
+      -- authoritative) so a stale file NEVER falsely reads "relaxed".
+      -- No short-circuit in Rail -> nested if/then/else (not &&) for the guard.
+      let lf = if length parts < 4 then 1 else parse_int_signed (head (tail (tail (tail parts))))
+      -- A7 (C2): recompute reachability from the REAL pulses, joints="observed".
+      http_response 200 "OK" "application/json" (state_json ap1 ap2 ap3 cp4 csu (reach_from_pulses ap1 ap2 ap3) lf "observed")
 
 route_actual _ =
   let mode = bridge_mode_env 0
   if mode == "tcp" then route_actual_tcp 0
   else if mode == "fifo" then route_actual_fifo 0
   else
+    -- off mode: no real arm -> return /state verbatim (ghost stays hidden),
+    -- loaded=1, joints="commanded" (C2).
     let (cp1, cp2, cp3, cp4, csu) = load_state 0
-    http_response 200 "OK" "application/json" (state_json cp1 cp2 cp3 cp4 csu 1)
+    http_response 200 "OK" "application/json" (state_json cp1 cp2 cp3 cp4 csu 1 1 "commanded")
+
+-- /attest_observed?seq=&op1=&op2=&op3=&loaded= (A1 / C4)
+-- The RELAY->RAIL seam: the Python relay (it holds the serial port) GETs this
+-- after a commanded move settles, passing the arm's REAL bus-servo readback
+-- (op1,op2,op3) plus a monotonic command seq and the loaded flag. We append an
+-- OBSERVED chain entry recording the outcome, sharing prev_sha lineage with the
+-- immediately-preceding commanded entry (command -> outcome -> command -> ...).
+--
+-- HONESTY RULE (C2/C4, shared with A7): only the three bus servos are sensable.
+-- The LFD-01M wrist (p4_us) and the vacuum (su) are open-loop / un-sensable, so
+-- the observed entry carries the REAL p1/p2/p3 readback but re-uses the
+-- LAST-COMMANDED p4_us,su from load_state. We NEVER fabricate a wrist/suction
+-- readback.
+--
+-- kind   = "observed"          when loaded=1 (the commanded outcome)
+--        = "observed_relaxed"  when loaded=0 (servos unloaded -> a sag, A2)
+-- params = "seq=<N>" (deterministic, no user bytes).
+-- state  = "op1,op2,op3,<cp4>,<csu>" (5 ints, same canonical formula as
+--          attest_action, so verify_chain.py needs NO change).
+--
+-- IDEMPOTENT BY seq: if seq <= the persisted last-observed seq we respond
+-- {"ok":true,"dup":true} and chain nothing. Otherwise we chain, then persist
+-- the new seq via the C6 tmp+rename convention.
+--
+-- NOT e-stop gated: an observed entry must record reality even after an e-stop.
+-- The relay calls this OUTSIDE its serial _lock with a short timeout/try-except,
+-- so it can never block motion -- the route itself just appends and returns.
+observed_last_seq _ =
+  let s = read_file (cp_observed_seq 0)
+  if length s == 0 then 0 else parse_int_signed s
+
+persist_observed_seq seq =
+  let sp = cp_observed_seq 0
+  let tmp = join "" [sp, ".tmp"]
+  let _ = write_file tmp (show seq)
+  let _ = shell (join "" ["mv -f ", tmp, " ", sp])
+  0
+
+route_attest_observed q =
+  let seq = qp_get q "seq"
+  let last_seq = observed_last_seq 0
+  -- Idempotency: a retried or out-of-order trigger must NOT double-chain.
+  if seq < last_seq + 1 then
+    http_response 200 "OK" "application/json"
+      (join "" ["{\"ok\":true,\"dup\":true,\"seq\":", show seq,
+                ",\"last_seq\":", show last_seq, "}"])
+  else
+    let op1 = qp_get q "op1"
+    let op2 = qp_get q "op2"
+    let op3 = qp_get q "op3"
+    -- loaded defaults to 1 (C1/C4 honesty: never silently treat as relaxed).
+    let q_pairs = str_split "&" q
+    let s_loaded = qp_search_str q_pairs "loaded"
+    let loaded = if length s_loaded == 0 then 1 else qp_get q "loaded"
+    -- Carry forward last-commanded wrist + suction (open-loop, un-sensable).
+    let (cp1, cp2, cp3, cp4, csu) = load_state 0
+    let kind = if loaded == 0 then "observed_relaxed" else "observed"
+    let params = join "" ["seq=", show seq]
+    -- Build the entry EXACTLY like attest_action (canonical = prev|t|kind|params|state)
+    -- and persist via the shared A9 chain_persist helper. prev_sha == the
+    -- preceding commanded entry's sha -> command/outcome lineage for free.
+    let prev = chain_current_head 0
+    let next_idx = (chain_current_idx 0) + 1
+    let t = now_utc 0
+    let state_canon = join "," [show op1, show op2, show op3, show cp4, show csu]
+    let canonical = join "|" [prev, t, kind, params, state_canon]
+    let new_sha = sha256_of canonical
+    let entry = join "" ["{\"idx\":", show next_idx,
+                         ",\"t\":\"", t,
+                         "\",\"kind\":\"", kind,
+                         "\",\"params\":\"", json_escape params,
+                         "\",\"state\":\"", state_canon,
+                         "\",\"prev_sha\":\"", prev,
+                         "\",\"sha\":\"", new_sha, "\"}\n"]
+    let _ = chain_persist new_sha next_idx entry
+    -- Persist the seq AFTER the entry is committed (so a crash between the two
+    -- only ever re-chains -- it never advances the seq past an unwritten entry).
+    let _ = persist_observed_seq seq
+    http_response 200 "OK" "application/json"
+      (join "" ["{\"ok\":true,\"idx\":", show next_idx,
+                ",\"sha\":\"", new_sha,
+                "\",\"kind\":\"", kind, "\"}"])
 
 -- /bridge_status -- last byte frame the bridge sent (if any) + mode
 route_bridge_status _ =
@@ -1105,6 +1423,112 @@ route_bridge_status _ =
 -- Each program is a .txt file in programs/ with one step per line:
 --   <p1> <p2> <p3> <p4_us> <time_ms> <wait_ms> <suction>
 -- Comments start with #.
+
+-- ═════ Program pre-flight validation (A4 / C10) ═════
+-- /validate_program?name=X is the CANONICAL, non-actuating validator: it
+-- reads programs/<name>.txt, parses each non-comment step's first 3 pulse
+-- fields, applies the SAME clamp_int (j*_p_lo/hi) and envelope_check (C9)
+-- that route_pose uses to actuate, and emits one violation object per bad
+-- step. NO save_state / attest / bridge_send -- safe to call with the bridge
+-- ON. Both tools/program_runner.sh and route_program fail CLOSED on its
+-- ok:false (defense in depth) so no FK is ever re-implemented in bash.
+--
+-- Step file format (C10 / shared contract): one step per line
+--   <p1> <p2> <p3> <p4_us> <time_ms> <wait_ms> <suction>
+-- with # comments and IRREGULAR whitespace (2-space gaps in real files).
+-- str_split " " yields empty tokens on multi-space gaps -> filter_nonempty
+-- before indexing. We validate the first 3 fields (the joint pulses that
+-- become /pose p1 p2 p3); p4_us/suction don't affect the geometry envelope.
+
+-- Drop a trailing '# comment' from a raw program line (keep the part before #).
+prog_strip_comment_acc cs acc =
+  if cs == [] then acc
+  else if head cs == "#" then acc
+  else prog_strip_comment_acc (tail cs) (join "" [acc, head cs])
+
+prog_strip_comment line = prog_strip_comment_acc (chars line) ""
+
+-- Map an envelope reason_code to the C10 violation label string.
+--   1=floor (below table floor), 2=floor (below origin plane),
+--   3=collision (tip inside base column), 4=reach (beyond max reach).
+envelope_violation_label code =
+  if code == 1 then "floor"
+  else if code == 2 then "floor"
+  else if code == 3 then "collision"
+  else "reach"
+
+-- Build one violation JSON object for a bad step (C10 shape).
+prog_violation_obj step_idx p1 p2 p3 p4 code =
+  let tip_z = fk_tip_z p1 p2 p3
+  join "" ["{\"step\":", show step_idx,
+           ",\"pulses\":[", show p1, ",", show p2, ",", show p3, ",", show p4,
+           "],\"tip_z\":", sf tip_z,
+           ",\"violation\":\"", envelope_violation_label code, "\"}"]
+
+-- Validate one raw step line. Returns (counted, violation_or_empty):
+--   counted        = 1 if the line is a real step (parsed >=3 pulses), else 0
+--   violation_or_empty = the violation JSON if the (clamped) step fails the
+--                        envelope, else "".
+-- Clamp BEFORE envelope_check, mirroring route_pose:910-919 EXACTLY so
+-- validation matches what would actually be actuated.
+validate_program_step step_idx raw =
+  let line = prog_strip_comment raw
+  let toks = filter_nonempty (str_split " " line)
+  if length toks < 3 then (0, "")
+  else
+    let p1 = clamp_int j1_p_lo j1_p_hi (parse_int_signed (head toks))
+    let p2 = clamp_int j2_p_lo j2_p_hi (parse_int_signed (head (tail toks)))
+    let p3 = clamp_int j3_p_lo j3_p_hi (parse_int_signed (head (tail (tail toks))))
+    let p4 = if length toks < 4 then home_p4_us
+             else clamp_int j4_us_lo j4_us_hi (parse_int_signed (head (tail (tail (tail toks)))))
+    let (env_ok, env_code) = envelope_check p1 p2 p3
+    if env_ok == 0 then (1, prog_violation_obj step_idx p1 p2 p3 p4 env_code)
+    else (1, "")
+
+-- Walk the program lines accumulating (steps, violations).
+--   step_idx counts only real (non-comment, >=3-token) steps, 1-based, so the
+--   "step":N in a violation matches the program_runner.sh step counter.
+validate_program_lines lines step_idx steps_acc viol_acc =
+  if lines == [] then (steps_acc, viol_acc)
+  else
+    let raw = head lines
+    let (counted, viol) = validate_program_step (step_idx + 1) raw
+    if counted == 0 then
+      validate_program_lines (tail lines) step_idx steps_acc viol_acc
+    else
+      let next_idx = step_idx + 1
+      let next_steps = steps_acc + 1
+      let next_viol = if length viol == 0 then viol_acc else append viol_acc [viol]
+      validate_program_lines (tail lines) next_idx next_steps next_viol
+
+-- Core validation over a file's contents. Returns the JSON body string.
+-- ok=true iff there are zero violations.
+validate_program_body name content =
+  let lines = str_split "\n" content
+  let (steps, viols) = validate_program_lines lines 0 0 []
+  let ok_str = if viols == [] then "true" else "false"
+  join "" ["{\"ok\":", ok_str,
+           ",\"program\":\"", json_escape name, "\"",
+           ",\"steps\":", show steps,
+           ",\"violations\":[", join "," viols, "]}"]
+
+-- /validate_program?name=X
+route_validate_program q =
+  let name = qp_get_str q "name"
+  if length name == 0 then
+    http_response 400 "Bad Request" "application/json" "{\"ok\":false,\"reason\":\"missing name\"}"
+  else
+    let prog_file = join "" [programs_dir_default, "/", name, ".txt"]
+    -- shell() keeps the trailing newline, so compare against "y" (tr -strip)
+    -- rather than "n" -- a missing program must FAIL CLOSED (404), never
+    -- validate as an empty 0-step program (which would read ok:true).
+    let exists_check = shell (join "" ["{ test -f ", prog_file, " && echo y || echo n; } | tr -d '\n'"])
+    if exists_check == "y" then
+      let content = read_file prog_file
+      http_response 200 "OK" "application/json" (validate_program_body name content)
+    else
+      http_response 404 "Not Found" "application/json"
+        (join "" ["{\"ok\":false,\"reason\":\"program not found\",\"program\":\"", json_escape name, "\"}"])
 
 route_programs _ =
   let cmd = join "" ["ls -1 ", programs_dir_default, "/*.txt 2>/dev/null | sed 's|.*/||;s|\\.txt$||'"]
@@ -1130,16 +1554,34 @@ route_program q =
     http_response 400 "Bad Request" "application/json" "{\"ok\":false,\"reason\":\"missing name\"}"
   else
     let prog_file = join "" [programs_dir_default, "/", name, ".txt"]
-    let exists_check = shell (join "" ["test -f ", prog_file, " && echo y || echo n"])
-    if exists_check == "n" then
+    -- shell() keeps the trailing newline; compare against "y" (tr-stripped) so
+    -- a MISSING program fails closed (404) and never reaches the launch path
+    -- with an empty 0-step file.
+    let exists_check = shell (join "" ["{ test -f ", prog_file, " && echo y || echo n; } | tr -d '\n'"])
+    if exists_check == "y" then
+      -- A4 (C10) defense-in-depth: run the SAME pre-flight validator inline and
+      -- REFUSE to launch the runner (HTTP 422, no save_state/attest/bridge) if
+      -- any step violates the envelope. The runner gates too, but this enforces
+      -- the gate even when /program is hit directly, by hand, or by a stale
+      -- runner. The non-actuating validate is fast (FK only).
+      let content = read_file prog_file
+      let lines = str_split "\n" content
+      let (steps, viols) = validate_program_lines lines 0 0 []
+      if viols == [] then
+        let _ = shell (join "" ["( bash ", program_runner_path, " ", prog_file,
+                                " & echo $! > ", program_pid_path, " ) >/dev/null 2>&1 &"])
+        let _ = attest_action "program_start" (join "" ["name=", name]) 0 0 0 0 0
+        http_response 202 "Accepted" "application/json"
+          (join "" ["{\"ok\":true,\"program\":\"", json_escape name, "\",\"started\":true}"])
+      else
+        http_response 422 "Unprocessable Entity" "application/json"
+          (join "" ["{\"ok\":false,\"program\":\"", json_escape name, "\"",
+                    ",\"steps\":", show steps,
+                    ",\"reason\":\"pre-flight failed: step(s) violate the safety envelope\"",
+                    ",\"violations\":[", join "," viols, "]}"])
+    else
       http_response 404 "Not Found" "application/json"
         (join "" ["{\"ok\":false,\"reason\":\"program not found\",\"name\":\"", json_escape name, "\"}"])
-    else
-      let _ = shell (join "" ["( bash ", program_runner_path, " ", prog_file,
-                              " & echo $! > ", program_pid_path, " ) >/dev/null 2>&1 &"])
-      let _ = attest_action "program_start" (join "" ["name=", name]) 0 0 0 0 0
-      http_response 202 "Accepted" "application/json"
-        (join "" ["{\"ok\":true,\"program\":\"", json_escape name, "\",\"started\":true}"])
 
 -- /program/stop  -- kill any running runner
 route_program_stop _ =
@@ -1172,6 +1614,7 @@ main =
   let resp =
     if plain == "/" then route_index 0
     else if plain == "/state" then route_state 0
+    else if plain == "/selftest_geom" then route_selftest_geom 0
     else if plain == "/pose" then route_pose query
     else if plain == "/reach" then route_reach query
     else if plain == "/nozzle" then route_nozzle query
@@ -1187,8 +1630,10 @@ main =
     else if plain == "/estop" then route_estop 0
     else if plain == "/clear" then route_clear 0
     else if plain == "/actual" then route_actual 0
+    else if plain == "/attest_observed" then route_attest_observed query
     else if plain == "/bridge_status" then route_bridge_status 0
     else if plain == "/programs" then route_programs 0
+    else if plain == "/validate_program" then route_validate_program query
     else if plain == "/program" then route_program query
     else if plain == "/program/stop" then route_program_stop 0
     else route_404 plain

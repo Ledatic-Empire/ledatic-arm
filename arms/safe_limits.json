@@ -13,5 +13,7 @@
     "x": [-130, 130],
     "y": [-230, -90],
     "z": [120, 260]
-  }
+  },
+  "_z_floor": "z_floor_mm is the real table-surface floor. src/armsim.rail MUST mirror it via the table_floor_mm accessor (A3/A8/C8 shared contract); below-floor poses are rejected HTTP 422 at every actuation chokepoint. Equals xyz.z[0].",
+  "z_floor_mm": 120
 }
