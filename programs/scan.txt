@@ -1,20 +1,20 @@
-# scan.txt -- workspace scan (re-authored 2026-06-14).
-# A steady searching base sweep (the base is mechanically slow, so a scan is the
-# one place that reads well at low speed), arm high (shoulder 500, elbow 540 ->
-# tip safe), with fast nozzle pans + suction "pings" at each end. ends home.
+# scan.txt -- workspace scan (re-timed 2026-06-14 to servo max speed).
+# The old 1400-1900ms base moves crawled (run honors dur). Timed to max-speed
+# completion now: crisp full-speed pans, arm high (shoulder 500, elbow 540 ->
+# tip safe), nozzle pans + suction pings at each end. ends home.
 # format: p1 p2 p3 p4_us time_ms wait_ms suction
-500 500 540 1500  300  60 off
+500 500 540 1500  320  60 off
 
-# pan left, scan + nozzle ping
-350 500 540 1900 1400 100 on
-350 500 540  900  220  50 -
-350 500 540 1900  220  60 off
+# pan left (140p, max speed) + nozzle ping
+360 500 540 1900  420  80 on
+360 500 540  900  280  50 -
+360 500 540 1900  280  60 off
 
-# sweep right, scan + nozzle ping
-650 500 540 1900 1500 100 on
-650 500 540  900  220  50 -
-650 500 540 1900  220  60 off
+# full sweep right (280p, max speed) + nozzle ping
+640 500 540 1900  560  80 on
+640 500 540  900  280  50 -
+640 500 540 1900  280  60 off
 
 # return center + home
-500 500 540 1500 1000  80 -
-500 500 500 1500  400   0 off
+500 500 540 1500  420  60 -
+500 500 500 1500  340   0 off

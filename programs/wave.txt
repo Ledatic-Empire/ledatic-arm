@@ -1,27 +1,26 @@
-# wave.txt -- friendly FAST wave (re-authored 2026-06-14).
-# Energy from fast nozzle sweeps + suction, tip stays high (shoulder<=500,
-# elbow<=560). A small quick base wiggle adds life without dipping/extending.
+# wave.txt -- FAST friendly wave (re-timed 2026-06-14 to servo max speed).
+# The old 170ms nozzle moves collapsed (servo couldn't finish + runner advanced);
+# ~280ms lets each full sweep complete = crisp. Fast nozzle waves + suction, quick
+# base wiggle. Tip stays high (shoulder<=500, elbow<=560). ends home.
 # format: p1 p2 p3 p4_us time_ms wait_ms suction
-500 500 540 1500  300  60 off
+500 500 540 1500  320  60 off
+500 480 560 1500  320  60 -
 
-# raise to a friendly compact "hello" pose
-500 480 560 1500  300  60 -
+# fast full nozzle wave side-to-side + suction greeting
+500 480 560 2300  280  50 on
+500 480 560  700  280  50 -
+500 480 560 2300  280  50 -
+500 480 560  700  280  50 off
+500 480 560 2300  280  50 -
+500 480 560  700  280  60 -
 
-# fast nozzle wave side-to-side (the wave) + suction greeting
-500 480 560 2300  180  30 on
-500 480 560  700  180  30 -
-500 480 560 2300  170  30 -
-500 480 560  700  170  30 off
-500 480 560 2300  170  30 -
-500 480 560  700  170  40 -
-
-# small quick base wiggle (high/compact) while waving the nozzle
-450 480 560 2000  300  40 on
-550 480 560 1000  300  40 -
-450 480 560 2000  300  40 -
-550 480 560 1000  300  50 off
+# quick base wiggle (100p -> ~300ms) while waving the nozzle
+450 480 560 2000  300  50 on
+550 480 560 1000  300  50 -
+450 480 560 2000  300  50 -
+550 480 560 1000  300  60 off
 
 # big friendly nozzle finish + home
-500 490 560 2300  200  60 on
-500 490 560  700  200  60 off
-500 500 500 1500  300   0 off
+500 490 560 2300  300  60 on
+500 490 560  700  300  60 off
+500 500 500 1500  340   0 off
